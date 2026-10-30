@@ -1,0 +1,153 @@
+:host {
+  position: relative;
+  display: block;
+  height: 100%;
+  min-height: 320px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+.legend {
+  position: absolute;
+  left: 10px;
+  bottom: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-width: calc(100% - 20px);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(11, 15, 20, 0.82);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-dim);
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+}
+
+.sw {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px dashed;
+
+  &.base { border-color: var(--zone-base); background: rgba(92, 200, 255, 0.2); }
+  &.corridor { border-color: var(--zone-corridor); background: rgba(61, 220, 132, 0.25); }
+  &.interference { border-color: var(--zone-interference); background: rgba(255, 159, 67, 0.2); }
+  &.threat { border-color: var(--zone-threat); background: rgba(255, 84, 99, 0.2); }
+}
+
+.ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--red);
+}
+
+.path {
+  width: 14px;
+  border-top: 2px dashed var(--red);
+}
+
+.overlay-tr {
+  position: absolute;
+  top: 10px;
+  right: 50px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+// Markers are created imperatively, so these rules must pierce view encapsulation.
+:host ::ng-deep {
+  .drone-marker {
+    --status: var(--green);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    color: var(--status);
+
+    &.status-YELLOW { --status: var(--yellow); }
+    &.status-RED { --status: var(--red); }
+
+    .glyph {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      font-size: 12px;
+      background: rgba(11, 15, 20, 0.9);
+      border: 2px solid var(--status);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--status) 20%, transparent);
+      transition: transform 0.4s linear;
+    }
+
+    .tag {
+      font: 600 10px/1 var(--mono);
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: rgba(11, 15, 20, 0.85);
+      color: var(--text);
+      border: 1px solid color-mix(in srgb, var(--status) 50%, transparent);
+    }
+
+    &.status-RED .glyph {
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    &.selected .glyph {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--status) 30%, transparent), 0 0 0 7px #fff;
+    }
+
+    &.landed {
+      opacity: 0.6;
+    }
+  }
+
+  .zone-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-shadow: 0 1px 3px #000;
+    white-space: nowrap;
+
+    em {
+      font-style: normal;
+      font-weight: 500;
+      font-size: 9px;
+      color: var(--yellow);
+    }
+
+    &.zone-BASE { color: var(--zone-base); }
+    &.zone-SAFE_CORRIDOR { color: var(--zone-corridor); }
+    &.zone-INTERFERENCE { color: var(--zone-interference); }
+    &.zone-THREAT { color: var(--zone-threat); }
+  }
+}
+
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 9px color-mix(in srgb, var(--red) 10%, transparent);
+  }
+}

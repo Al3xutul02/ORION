@@ -1,0 +1,17 @@
+<div class="map" #map></div>
+
+<div class="legend">
+  <span><i class="sw base"></i>Base</span>
+  <span><i class="sw corridor"></i>Safe corridor</span>
+  <span><i class="sw interference"></i>Interference</span>
+  <span><i class="sw threat"></i>Threat</span>
+  <span><i class="ring"></i>Uncertainty</span>
+  <span><i class="path blocked"></i>RTL blocked</span>
+</div>
+
+<div class="overlay-tr">
+  @if (store.sectorInterference()) {
+    <span class="chip yellow"><span class="dot"></span>Localized interference active</span>
+  }
+  <button class="btn sm" type="button" (click)="recenter()">Recenter</button>
+</div>

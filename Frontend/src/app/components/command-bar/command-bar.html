@@ -1,0 +1,75 @@
+<header class="bar">
+  <a class="brand" routerLink="/">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="5.5" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+    </svg>
+    <span class="name">ORION</span>
+    <span class="sub">Ground Control</span>
+  </a>
+
+  <nav class="tabs no-print">
+    <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Operations</a>
+    <a routerLink="/report" routerLinkActive="active">Report</a>
+  </nav>
+
+  <div class="mode no-print" role="group" aria-label="Data source">
+    <button type="button" [class.on]="store.mode() === 'live'" (click)="store.setMode('live')">Live</button>
+    <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Offline</button>
+  </div>
+
+  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'In-browser scenario (Plan B)'">
+    <span class="dot"></span>
+    @switch (store.mode() === 'offline' ? 'local' : store.link()) {
+      @case ('online') { Backend online }
+      @case ('connecting') { Connecting… }
+      @case ('offline') { Backend offline }
+      @default { Local scenario }
+    }
+  </span>
+
+  <span class="spacer"></span>
+
+  <div class="clock mono" aria-label="Mission time">
+    <span class="t">T+{{ clock() }}</span>
+    <span class="step">{{ currentStep().label }}</span>
+  </div>
+
+  <div class="controls no-print">
+    @if (store.running()) {
+      <button class="btn" type="button" (click)="store.pause()" [disabled]="store.busy()">Pause</button>
+    } @else {
+      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">Start</button>
+    }
+    <button class="btn" type="button" (click)="store.reset()" [disabled]="store.busy()">Reset</button>
+    @if (store.mode() === 'offline') {
+      <div class="speed" role="group" aria-label="Playback speed">
+        @for (s of speeds; track s) {
+          <button type="button" [class.on]="store.speed() === s" (click)="store.setSpeed(s)">{{ s }}×</button>
+        }
+      </div>
+    }
+    <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
+      {{ store.muted() ? '🔇' : '🔊' }}
+    </button>
+  </div>
+</header>
+
+<div class="timeline no-print">
+  <div class="track">
+    <div class="fill" [style.width.%]="progress()"></div>
+    @for (s of scenario; track s.at) {
+      <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
+        <span class="pin"></span>
+        <span class="lbl">{{ s.label }}</span>
+      </span>
+    }
+  </div>
+  <div class="inject">
+    <span class="hint">Inject:</span>
+    <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
+    <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
+    <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Sector jam</button>
+  </div>
+</div>

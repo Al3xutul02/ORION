@@ -1,5 +1,17 @@
 # Frontend
 
+ORION Ground Control UI (Angular 20 + MapLibre GL).
+
+- **Operations** (`/`): theatre map with zones, drones, uncertainty circles and blocked/safe egress paths; per-drone trust scores (GPS, INS, link, peer consensus); the "what is safe now" action matrix with operator approval; the hash-chained after-action log.
+- **Report** (`/report`): post-action report with chain verification, attacks, decisions and full timeline. Export as JSON or print to PDF.
+
+Data sources (toggle in the top bar):
+
+- **Live**: FastAPI backend at `http://localhost:8000` (WebSocket `/ws/telemetry` + REST `/api/v1`). Point elsewhere with `?api=http://host:port`.
+- **Offline**: the same 3-minute demo timeline run in the browser (Plan B). Used automatically if the backend does not answer within 4 s. Supports 1×/2×/4× playback and a tamper test for the hash chain.
+
+The backend CORS list allows `http://localhost:4200`, so run the dev server on that port when using Live mode.
+
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 20.1.1.
 
 ## Development server

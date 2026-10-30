@@ -1,0 +1,145 @@
+// Shapes mirror the FastAPI schemas in Backend/app/schemas and the simulator's
+// FLEET_UPDATE WebSocket payload (Backend/app/services/simulator.py).
+
+export type TrustStatus = 'GREEN' | 'YELLOW' | 'RED';
+export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT';
+export type DataMode = 'live' | 'offline';
+export type LinkState = 'connecting' | 'online' | 'offline';
+
+export interface ScoreBreakdown {
+  drone_id: number;
+  trust_score: number;
+  trust_status: TrustStatus;
+  gps_score: number;
+  imu_score: number;
+  link_score: number;
+  consensus_score: number;
+  command_score: number;
+  uncertainty_radius_m: number;
+  reason: string;
+}
+
+export interface DroneState {
+  drone_id: number;
+  latitude: number;
+  longitude: number;
+  altitude: number;
+  ground_speed: number;
+  heading: number;
+  fix_type: number;
+  satellites_visible: number;
+  eph: number;
+  battery_remaining: number;
+  drop_rate_comm: number;
+  rssi: number;
+  flight_mode: string;
+  is_armed: boolean;
+  trust_score: number;
+  trust_status: TrustStatus;
+  uncertainty_radius_m: number;
+  reason: string;
+  scores?: ScoreBreakdown;
+  last_updated: string;
+}
+
+export interface Zone {
+  id: number;
+  name: string;
+  zone_type: ZoneType;
+  geometry_type: 'CIRCLE' | 'POLYGON';
+  center?: [number, number]; // [lat, lon]
+  radius_m?: number;
+  waypoints?: [number, number][]; // [lat, lon][]
+  is_active: boolean;
+  detected_by: string;
+}
+
+export interface FleetUpdate {
+  type: 'FLEET_UPDATE';
+  elapsed_time: number;
+  active_sector_interference: boolean;
+  zones: Zone[];
+  drones: DroneState[];
+}
+
+export interface SnapshotMessage {
+  type: 'SNAPSHOT';
+  zones: Zone[];
+  simulator_running: boolean;
+  elapsed_time: number;
+}
+
+export type SocketMessage = FleetUpdate | SnapshotMessage | { type: 'PONG' };
+
+export interface AuditEvent {
+  id: number;
+  timestamp: string;
+  event_type: string;
+  drone_id: number | null;
+  details: string;
+  operator_id: string;
+  prev_hash: string;
+  curr_hash: string;
+}
+
+export interface ChainVerification {
+  is_valid: boolean;
+  broken_at_index: number | null;
+  total_events: number;
+  message: string;
+}
+
+export type RecommendationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXECUTED';
+
+export interface Recommendation {
+  id: number;
+  drone_id: number;
+  timestamp: string;
+  trigger_event: string;
+  blocked_action: string;
+  blocked_reason: string;
+  recommended_action: string;
+  recommendation_details: string | null;
+  status: RecommendationStatus;
+  operator_id: string | null;
+  approved_at: string | null;
+}
+
+export interface SignedCommand {
+  command: string;
+  drone_id: number;
+  sequence: number;
+  params: Record<string, unknown>;
+  timestamp: number;
+  signature: string;
+}
+
+export interface DecisionResult {
+  status: string;
+  message: string;
+  signed_command: SignedCommand | null;
+}
+
+export interface ExportReport {
+  mission_id: string;
+  generated_at: string;
+  verification: ChainVerification;
+  timeline: AuditEvent[];
+  summary: Record<string, unknown>;
+}
+
+export interface ScenarioStep {
+  at: number; // seconds
+  label: string;
+  detail: string;
+}
+
+// Spec "Scenariu demo de 3 minute"
+export const SCENARIO: ScenarioStep[] = [
+  { at: 0, label: 'Context', detail: 'Four drones patrol the sector, everything nominal' },
+  { at: 30, label: 'GPS spoofing on Drone 2', detail: 'Position jumps, trust drops, consensus isolates it' },
+  { at: 60, label: 'What is safe now', detail: 'RTL blocked by interference zone, loiter + corridor recommended' },
+  { at: 100, label: 'Replayed command', detail: 'An old signed command is retransmitted and rejected' },
+  { at: 130, label: 'Zone interference', detail: 'Two drones lose GPS, sector marked, patrol reallocated' },
+  { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
+];

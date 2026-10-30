@@ -1,0 +1,91 @@
+<section class="panel">
+  <header class="panel-head">
+    <h2>Decisions</h2>
+    <span class="spacer"></span>
+    @if (store.pendingRecommendations().length) {
+      <span class="chip yellow"><span class="dot"></span>{{ store.pendingRecommendations().length }} awaiting operator</span>
+    }
+  </header>
+
+  <div class="panel-body">
+    @for (rec of store.pendingRecommendations(); track rec.id) {
+      <article class="rec">
+        <div class="rec-head">
+          <strong>Drone {{ rec.drone_id }}</strong>
+          <span class="mono faint">#{{ rec.id }} · {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
+        </div>
+
+        @if (rec.blocked_action !== 'NONE') {
+          <div class="blocked">
+            <span class="tag">Blocked</span>
+            <div>
+              <strong>{{ pretty(rec.blocked_action) }}</strong>
+              <p>{{ rec.blocked_reason }}</p>
+            </div>
+          </div>
+        }
+
+        <div class="recommended">
+          <span class="tag">Recommended</span>
+          <div>
+            <strong>{{ pretty(rec.recommended_action) }}</strong>
+            <ol>
+              @for (s of steps(rec); track $index) {
+                <li>{{ s }}</li>
+              }
+            </ol>
+          </div>
+        </div>
+
+        <div class="rec-actions">
+          <button class="btn approve" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'APPROVE')">
+            Approve &amp; send signed
+          </button>
+          <button class="btn danger" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'REJECT')">Reject</button>
+        </div>
+        <p class="note">Only safe, reversible actions are proposed. The operator decides.</p>
+      </article>
+    }
+
+    <h3 class="sub">
+      Safe actions
+      @if (store.selectedDrone(); as d) {
+        <span class="chip status-chip status-{{ d.trust_status }}">Drone {{ d.drone_id }}</span>
+      }
+    </h3>
+
+    @if (store.selectedDrone()) {
+      <ul class="matrix">
+        @for (a of actions(); track a.id) {
+          <li [class.allowed]="a.allowed" [class.recommended]="a.recommended">
+            <span class="icon" aria-hidden="true">{{ a.allowed ? '✓' : '✕' }}</span>
+            <div>
+              <strong>{{ a.label }}</strong>
+              <span>{{ a.reason }}</span>
+            </div>
+            @if (a.recommended) {
+              <span class="chip accent">Recommended</span>
+            } @else if (!a.allowed) {
+              <span class="chip red">Blocked</span>
+            }
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="empty">Select a drone on the map or in the fleet list to see which actions are safe right now.</p>
+    }
+
+    @if (history().length) {
+      <h3 class="sub">Decision log</h3>
+      <ul class="history">
+        @for (r of history(); track r.id) {
+          <li>
+            <span class="chip" [class.green]="r.status !== 'REJECTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
+            <span>D{{ r.drone_id }} · {{ pretty(r.recommended_action) }}</span>
+            <span class="mono faint">{{ r.operator_id }} {{ r.approved_at | date: 'HH:mm:ss' }}</span>
+          </li>
+        }
+      </ul>
+    }
+  </div>
+</section>
