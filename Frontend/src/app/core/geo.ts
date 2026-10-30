@@ -55,8 +55,18 @@ export interface ActionOption {
   label: string;
   allowed: boolean;
   recommended: boolean;
+  /** The drone is currently executing this action. */
+  active: boolean;
   reason: string;
 }
+
+// flight_mode strings reported while each action runs (offline simulator; backend reports GUIDED).
+const ACTIVE_MODE: Record<ActionOption['id'], string> = {
+  RETURN_TO_HOME: 'RTL',
+  LOITER: 'LOITER',
+  SAFE_CORRIDOR_RETREAT: 'CORRIDOR',
+  CONTINUE_PATROL: 'GUIDED',
+};
 
 /**
  * "Ce pot face acum în siguranță?" — the per-drone action matrix. Mirrors the backend
@@ -73,7 +83,7 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
   const insideHazard = zoneContaining(zones, drone.latitude, drone.longitude);
 
   const rtlAllowed = !blocking;
-  return [
+  const options: Omit<ActionOption, 'active'>[] = [
     {
       id: 'RETURN_TO_HOME',
       label: 'Return to home',
@@ -103,6 +113,14 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
       reason: drone.trust_status === 'GREEN' ? 'Drone is trusted' : 'Position not trusted, mission would run in the wrong place',
     },
   ];
+
+  if (!drone.is_armed) {
+    return options.map(o => ({ ...o, allowed: false, recommended: false, active: false, reason: 'Drone has landed at base' }));
+  }
+  const withActive = options.map(o => ({ ...o, active: drone.flight_mode === ACTIVE_MODE[o.id] }));
+  // Already doing something safe about the degradation: nothing further to recommend.
+  const handled = withActive.some(o => o.active && o.allowed && o.id !== 'CONTINUE_PATROL');
+  return handled ? withActive.map(o => ({ ...o, recommended: false })) : withActive;
 }
 
 /** Direct base path + corridor egress path, as [lon, lat] lines for the map overlay. */

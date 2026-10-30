@@ -125,15 +125,32 @@
     background: var(--panel-2);
     font-size: 12.5px;
 
-    div {
+    .what {
       display: flex;
       flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
       min-width: 0;
+
+      .chip {
+        margin-top: 3px;
+      }
+    }
+
+    .do {
+      display: flex;
+      gap: 4px;
+      align-items: center;
     }
 
     span:not(.icon):not(.chip) {
       color: var(--text-dim);
       font-size: 11.5px;
+    }
+
+    &.active {
+      border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+      background: color-mix(in srgb, var(--green) 6%, var(--panel-2));
     }
 
     .icon {
@@ -161,6 +178,62 @@
       border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
     }
   }
+}
+
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.pick {
+  --status: var(--green);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+
+  &.status-YELLOW { --status: var(--yellow); }
+  &.status-RED { --status: var(--red); }
+
+  .dot {
+    color: var(--status);
+  }
+
+  .mono {
+    font-weight: 500;
+    color: var(--status);
+  }
+
+  &:hover {
+    border-color: #3b5168;
+  }
+
+  &.on {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+  }
+}
+
+.current {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+
+  strong {
+    color: var(--text);
+  }
+}
+
+.matrix + .note {
+  margin: -6px 0 14px;
 }
 
 .history {

@@ -89,7 +89,8 @@ export interface ChainVerification {
   message: string;
 }
 
-export type RecommendationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXECUTED';
+// SUPERSEDED: offline only, the operator sent a different command to that drone instead.
+export type RecommendationStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXECUTED' | 'SUPERSEDED';
 
 export interface Recommendation {
   id: number;

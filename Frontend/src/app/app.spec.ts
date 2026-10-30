@@ -61,6 +61,16 @@ describe('theatre rules', () => {
     expect(actions.find(a => a.id === 'SAFE_CORRIDOR_RETREAT')!.recommended).toBeTrue();
   });
 
+  it('stops recommending once the drone is already retreating safely, and flags unsafe patrol', () => {
+    const retreating = evaluateActions({ ...drone(44.342, 23.836), flight_mode: 'CORRIDOR' }, zones);
+    expect(retreating.find(a => a.id === 'SAFE_CORRIDOR_RETREAT')!.active).toBeTrue();
+    expect(retreating.some(a => a.recommended)).toBeFalse();
+
+    const patrolling = evaluateActions(drone(44.342, 23.836), zones).find(a => a.id === 'CONTINUE_PATROL')!;
+    expect(patrolling.active).toBeTrue();
+    expect(patrolling.allowed).toBeFalse();
+  });
+
   it('allows RTL when the path is clear', () => {
     const rtl = evaluateActions(drone(44.316, 23.79), zones).find(a => a.id === 'RETURN_TO_HOME')!;
     expect(rtl.allowed).toBeTrue();

@@ -43,36 +43,87 @@
           </button>
           <button class="btn danger" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'REJECT')">Reject</button>
         </div>
-        <p class="note">Only safe, reversible actions are proposed. The operator decides.</p>
+        <p class="note">Or pick a different safe action for this drone below.</p>
       </article>
     }
 
-    <h3 class="sub">
-      Safe actions
-      @if (store.selectedDrone(); as d) {
-        <span class="chip status-chip status-{{ d.trust_status }}">Drone {{ d.drone_id }}</span>
-      }
-    </h3>
+    <h3 class="sub">Command a drone</h3>
 
-    @if (store.selectedDrone()) {
+    <div class="picker" role="radiogroup" aria-label="Drone to command">
+      @for (d of store.drones(); track d.drone_id) {
+        <button
+          type="button"
+          role="radio"
+          class="pick status-{{ d.trust_status }}"
+          [class.on]="store.selectedDroneId() === d.drone_id"
+          [attr.aria-checked]="store.selectedDroneId() === d.drone_id"
+          (click)="store.selectDrone(d.drone_id)"
+        >
+          <span class="dot"></span>D{{ d.drone_id }}
+          <span class="mono">{{ d.trust_score.toFixed(0) }}</span>
+        </button>
+      }
+    </div>
+
+    @if (store.selectedDrone(); as d) {
+      <p class="current">
+        Drone {{ d.drone_id }} is flying <strong class="mono">{{ d.flight_mode }}</strong>.
+        @if (canCommand()) {
+          Choose what it should do next:
+        }
+      </p>
+
       <ul class="matrix">
         @for (a of actions(); track a.id) {
-          <li [class.allowed]="a.allowed" [class.recommended]="a.recommended">
+          <li [class.allowed]="a.allowed" [class.recommended]="a.recommended" [class.active]="a.active">
             <span class="icon" aria-hidden="true">{{ a.allowed ? '✓' : '✕' }}</span>
-            <div>
+            <div class="what">
               <strong>{{ a.label }}</strong>
               <span>{{ a.reason }}</span>
+              @if (a.recommended && !a.active) {
+                <span class="chip accent">Recommended</span>
+              }
             </div>
-            @if (a.recommended) {
-              <span class="chip accent">Recommended</span>
-            } @else if (!a.allowed) {
-              <span class="chip red">Blocked</span>
-            }
+
+            <div class="do">
+              @if (a.active && a.allowed) {
+                <span class="chip green">Active</span>
+              } @else if (a.active) {
+                <span class="chip red" title="The drone is doing this now, but it is not safe">Active · unsafe</span>
+              } @else if (!a.allowed) {
+                <span class="chip red">Blocked</span>
+              } @else if (confirming() === a.id) {
+                <button class="btn sm approve" type="button" (click)="send(a)">Confirm</button>
+                <button class="btn sm ghost" type="button" (click)="confirming.set(null)">Cancel</button>
+              } @else {
+                <button
+                  class="btn sm"
+                  type="button"
+                  [disabled]="!canCommand()"
+                  [title]="canCommand() ? 'Send a signed command' : 'Live backend has no direct-command endpoint yet'"
+                  (click)="confirming.set(a.id)"
+                >
+                  Send
+                </button>
+              }
+            </div>
           </li>
         }
       </ul>
+
+      @if (!canCommand()) {
+        <p class="note">Live mode: direct commands need a backend endpoint. For now, approve ORION's recommendations above.</p>
+      } @else {
+        <p class="note">Each command is signed and written to the after-action log. Blocked actions can't be sent.</p>
+      }
     } @else {
-      <p class="empty">Select a drone on the map or in the fleet list to see which actions are safe right now.</p>
+      <p class="empty">
+        @if (store.drones().length) {
+          Pick a drone above, on the map, or in the fleet list.
+        } @else {
+          No drones yet. Press Start.
+        }
+      </p>
     }
 
     @if (history().length) {
@@ -80,7 +131,7 @@
       <ul class="history">
         @for (r of history(); track r.id) {
           <li>
-            <span class="chip" [class.green]="r.status !== 'REJECTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
+            <span class="chip" [class.green]="r.status === 'APPROVED' || r.status === 'EXECUTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
             <span>D{{ r.drone_id }} · {{ pretty(r.recommended_action) }}</span>
             <span class="mono faint">{{ r.operator_id }} {{ r.approved_at | date: 'HH:mm:ss' }}</span>
           </li>

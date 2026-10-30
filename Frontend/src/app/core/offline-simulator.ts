@@ -1,4 +1,4 @@
-import { evaluateActions, egressPaths, distanceM } from './geo';
+import { ActionOption, evaluateActions, egressPaths, distanceM } from './geo';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, Zone } from './models';
 
@@ -35,6 +35,7 @@ interface SimDrone {
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
   egressLeg: number;
+  route: 'RTL' | 'CORRIDOR';
 }
 
 export interface OfflineCallbacks {
@@ -82,7 +83,7 @@ export class OfflineSimulator {
     this.zones = structuredClone(INITIAL_ZONES);
     this.drones = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2].map((angle, i) => ({
       id: i + 1, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null,
-      mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0,
+      mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
     }));
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
@@ -183,25 +184,70 @@ export class OfflineSimulator {
       return { ok: true, message: 'Recommendation rejected.' };
     }
 
-    const seq = this.commandSeq++;
     this.log('OPERATOR_APPROVAL', rec.drone_id, { recommendation_id: rec.id, action: rec.recommended_action }, operatorId);
-    this.log('COMMAND_EXECUTED', rec.drone_id, {
-      command: rec.recommended_action, sequence: seq, signed: true, signing: 'MAVLINK2_HMAC_SHA256',
+    const seq = this.dispatch(rec.drone_id, rec.recommended_action, operatorId);
+    return { ok: true, message: `Signed ${rec.recommended_action} dispatched (seq ${seq}).` };
+  }
+
+  /** Operator-chosen command for one drone (the store has already checked it is allowed). */
+  command(droneId: number, action: ActionOption['id'], operatorId: string): { ok: boolean; message: string } {
+    const d = this.drone(droneId);
+    if (!d || d.mode === 'LANDED') return { ok: false, message: `Drone ${droneId} has landed.` };
+    this.log('OPERATOR_COMMAND', droneId, { action, origin: 'MANUAL' }, operatorId);
+    // A manual order supersedes whatever ORION was still waiting on for this drone.
+    for (const rec of this.recs.filter(r => r.drone_id === droneId && r.status === 'PENDING')) {
+      rec.status = 'SUPERSEDED';
+      rec.operator_id = operatorId;
+      rec.approved_at = new Date().toISOString();
+      this.log('RECOMMENDATION_SUPERSEDED', droneId, { recommendation_id: rec.id, reason: `Operator chose ${action} instead` }, operatorId);
+    }
+    this.recs = [...this.recs];
+    this.cb.onRecommendations(this.recs);
+    const seq = this.dispatch(droneId, action, operatorId);
+    return { ok: true, message: `Signed ${action} sent to Drone ${droneId} (seq ${seq}).` };
+  }
+
+  private dispatch(droneId: number, action: string, operatorId: string): number {
+    const seq = this.commandSeq++;
+    this.log('COMMAND_EXECUTED', droneId, {
+      command: action, sequence: seq, signed: true, signing: 'MAVLINK2_HMAC_SHA256',
     }, operatorId);
 
-    const d = this.drone(rec.drone_id);
-    const state = this.states().find(s => s.drone_id === rec.drone_id)!;
-    if (rec.recommended_action === 'RETURN_TO_HOME') {
-      d.egressPath = egressPaths(state, this.zones).direct;
-      d.mode = 'EGRESS';
-    } else {
-      d.mode = 'LOITER';
-      d.loiterUntil = this.elapsed + 8;
-      d.egressPath = egressPaths(state, this.zones).viaCorridor;
-    }
+    const d = this.drone(droneId);
+    const state = this.states().find(s => s.drone_id === droneId)!;
+    const paths = egressPaths(state, this.zones);
     d.egressLeg = 0;
+    switch (action) {
+      case 'RETURN_TO_HOME':
+        d.route = 'RTL';
+        d.egressPath = paths.direct;
+        d.mode = 'EGRESS';
+        break;
+      case 'SAFE_CORRIDOR_RETREAT':
+        d.route = 'CORRIDOR';
+        d.egressPath = paths.viaCorridor;
+        d.mode = 'EGRESS';
+        break;
+      case 'LOITER':
+        d.mode = 'LOITER';
+        d.loiterUntil = Infinity;
+        d.egressPath = [];
+        break;
+      case 'LOITER_THEN_SAFE_CORRIDOR_RETREAT':
+        d.route = 'CORRIDOR';
+        d.mode = 'LOITER';
+        d.loiterUntil = this.elapsed + 8;
+        d.egressPath = paths.viaCorridor;
+        break;
+      case 'CONTINUE_PATROL':
+        // Rejoin the orbit at the nearest point instead of jumping back to the old one.
+        d.angle = Math.atan2((d.lat - CENTER.lat) / ORBIT.lat, (d.lon - CENTER.lon) / ORBIT.lon);
+        d.mode = 'PATROL';
+        d.egressPath = [];
+        break;
+    }
     this.emit();
-    return { ok: true, message: `Signed ${rec.recommended_action} dispatched (seq ${seq}).` };
+    return seq;
   }
 
   // ---- simulation loop -------------------------------------------------------------------
@@ -252,7 +298,7 @@ export class OfflineSimulator {
       }
       if (d.egressLeg >= d.egressPath.length - 1) {
         d.mode = 'LANDED';
-        this.log('DRONE_RECOVERED', d.id, { location: 'Base Forward Alpha', via: 'Safe Corridor Alpha' });
+        this.log('DRONE_RECOVERED', d.id, { location: 'Base Forward Alpha', via: d.route === 'RTL' ? 'Direct return-to-home' : 'Safe Corridor Alpha' });
       }
     }
   }
@@ -297,7 +343,7 @@ export class OfflineSimulator {
       const status: TrustStatus = score >= 75 ? 'GREEN' : score >= 40 ? 'YELLOW' : 'RED';
       const reason = reasons.length ? reasons.join('; ') : 'Sensors & consensus nominal';
 
-      const flightMode = d.mode === 'PATROL' ? 'GUIDED' : d.mode === 'EGRESS' ? 'GUIDED·EGRESS' : d.mode;
+      const flightMode = d.mode === 'PATROL' ? 'GUIDED' : d.mode === 'EGRESS' ? d.route : d.mode;
       return {
         drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : 120,
         ground_speed: d.mode === 'PATROL' ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,

@@ -1,5 +1,6 @@
 import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ORION_CONFIG } from './config';
+import { ActionOption, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
   AuditEvent, ChainVerification, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
@@ -26,6 +27,7 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
   COMMAND_AUTH_FAILED: { level: 'critical', title: 'Unauthenticated command rejected' },
   ZONE_INTERFERENCE_MARKED: { level: 'warn', title: 'Sector marked as interference' },
   OPERATOR_APPROVAL: { level: 'ok', title: 'Action approved' },
+  OPERATOR_COMMAND: { level: 'ok', title: 'Signed command sent' },
   MISSION_REPORT_READY: { level: 'info', title: 'Post-action report ready' },
   DRONE_RECOVERED: { level: 'ok', title: 'Drone recovered at base' },
 };
@@ -291,6 +293,23 @@ export class OrionStore implements OnDestroy {
   setSpeed(speed: number): void {
     this.speed.set(speed);
     if (this.offline) this.offline.speed = speed;
+  }
+
+  /** Operator picks an action for a drone directly, instead of approving an ORION recommendation. */
+  commandDrone(droneId: number, action: ActionOption['id']): void {
+    if (!this.offline) {
+      this.pushToast('warn', 'Not available in Live mode', 'The backend has no endpoint for direct commands yet; approve a recommendation instead.');
+      return;
+    }
+    // Re-check against the latest position and zones: the list on screen may be a tick old.
+    const drone = this.drones().find(d => d.drone_id === droneId);
+    const option = drone && evaluateActions(drone, this.zones()).find(a => a.id === action);
+    if (!option?.allowed) {
+      this.pushToast('critical', 'Command blocked', option ? `${option.label}: ${option.reason}` : `Drone ${droneId} not found`);
+      return;
+    }
+    const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId);
+    if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
   }
 
   async decide(rec: Recommendation, decision: 'APPROVE' | 'REJECT'): Promise<void> {
