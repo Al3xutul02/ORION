@@ -59,7 +59,7 @@
 <div class="timeline no-print">
   <div class="track">
     <div class="fill" [style.width.%]="progress()"></div>
-    @for (s of scenario; track s.at) {
+    @for (s of scenario(); track s.at) {
       <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
         <span class="pin"></span>
         <span class="lbl">{{ s.label }}</span>
@@ -70,6 +70,9 @@
     <span class="hint">Inject:</span>
     <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
     <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
-    <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Sector jam</button>
+    <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">{{ store.mode() === 'offline' ? 'Mobile jammer' : 'Sector jam' }}</button>
+    @if (store.mode() === 'offline') {
+      <button class="btn sm" type="button" (click)="store.trigger('linkloss')">Link loss D5</button>
+    }
   </div>
 </div>

@@ -81,6 +81,17 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
   const corridor = zones.find(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active);
   const degraded = drone.trust_status !== 'GREEN';
   const insideHazard = zoneContaining(zones, drone.latitude, drone.longitude);
+  // The corridor route must also stay clear of hazards (zones move now). A zone the drone is
+  // already inside doesn't count: leaving it is the point of retreating.
+  const route = egressPaths(drone, zones).viaCorridor;
+  const corridorBlocking = hazardZones(zones).find(z =>
+    z !== insideHazard &&
+    route.slice(1).some(([lon, lat], i) => {
+      const [pLon, pLat] = route[i];
+      return segmentIntersectsCircle(pLat, pLon, lat, lon, z.center![0], z.center![1], z.radius_m!);
+    }),
+  );
+  const corridorAllowed = !!corridor && !corridorBlocking;
 
   const rtlAllowed = !blocking;
   const options: Omit<ActionOption, 'active'>[] = [
@@ -101,9 +112,13 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
     {
       id: 'SAFE_CORRIDOR_RETREAT',
       label: corridor ? `Retreat via ${corridor.name}` : 'Retreat via safe corridor',
-      allowed: !!corridor,
-      recommended: degraded && !rtlAllowed && !!corridor,
-      reason: corridor ? 'Egress route avoids known hazard zones' : 'No safe corridor defined',
+      allowed: corridorAllowed,
+      recommended: degraded && !rtlAllowed && corridorAllowed,
+      reason: !corridor
+        ? 'No safe corridor defined'
+        : corridorBlocking
+          ? `Route to the corridor crosses ${corridorBlocking.name}`
+          : 'Egress route avoids known hazard zones',
     },
     {
       id: 'CONTINUE_PATROL',

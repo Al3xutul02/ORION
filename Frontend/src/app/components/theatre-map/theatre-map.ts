@@ -1,5 +1,5 @@
 import {
-  ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterNextRender, effect, inject, viewChild,
+  ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterNextRender, effect, inject, signal, viewChild,
 } from '@angular/core';
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
@@ -15,15 +15,23 @@ const ZONE_COLORS: Record<string, string> = {
 };
 const STATUS_COLORS: Record<string, string> = { GREEN: '#3ddc84', YELLOW: '#f5c542', RED: '#ff5463' };
 
-// No tile server: the theatre is fictional, so the map is a plain grid that works offline.
-const BLANK_STYLE: StyleSpecification = {
+// Real basemap (OpenStreetMap data via OpenFreeMap, no API key). The zones drawn on top are a
+// training exercise, not real data.
+const REAL_STYLE_URL = 'https://tiles.openfreemap.org/styles/dark';
+const REAL_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+
+// Offline fallback: a plain grid, so the demo still works without internet.
+const GRID_STYLE: StyleSpecification = {
   version: 8,
   sources: {},
   layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0d141c' } }],
 };
 
-// Base in the south-west to the threat zone and spoofed positions in the north-east.
-const THEATRE_BOUNDS: [[number, number], [number, number]] = [[23.794, 44.312], [23.85, 44.345]];
+export type Basemap = 'real' | 'grid';
+
+// Base in the south-west, patrol sectors and threat zone in the north-east.
+const THEATRE_BOUNDS: [[number, number], [number, number]] = [[23.794, 44.312], [23.866, 44.354]];
 
 const empty = (): FeatureCollection => ({ type: 'FeatureCollection', features: [] });
 
@@ -37,6 +45,7 @@ export class TheatreMap implements OnDestroy {
   protected store = inject(OrionStore);
   private host = viewChild.required<ElementRef<HTMLDivElement>>('map');
   private map: MlMap | null = null;
+  protected basemap = signal<Basemap>('grid');
   private ready = false;
   private resizeObserver: ResizeObserver | null = null;
   private droneMarkers = new Map<number, Marker>();
@@ -67,11 +76,34 @@ export class TheatreMap implements OnDestroy {
     this.map?.fitBounds(THEATRE_BOUNDS, { padding: 40, duration: 600 });
   }
 
+  protected setBasemap(kind: Basemap): void {
+    if (kind === this.basemap()) return;
+    try { localStorage.setItem('orion.basemap', kind); } catch { /* storage unavailable */ }
+    this.applyBasemap(kind);
+  }
+
+  private async applyBasemap(kind: Basemap): Promise<void> {
+    let style = GRID_STYLE;
+    if (kind === 'real') {
+      const real = await loadRealStyle();
+      if (real) {
+        style = real;
+      } else {
+        kind = 'grid';
+        this.store.pushToast('info', 'Real map unavailable', 'Could not load map tiles (no internet?). Showing the offline grid.');
+      }
+    }
+    this.basemap.set(kind);
+    // Overlay sources disappear with the old style; pause rendering until they are re-added.
+    this.ready = false;
+    this.map?.setStyle(style, { diff: false });
+  }
+
   private init(): void {
     const map = new maplibregl.Map({
       container: this.host().nativeElement,
-      style: BLANK_STYLE,
-      attributionControl: false,
+      style: GRID_STYLE,
+      attributionControl: { compact: true },
       dragRotate: false,
       pitchWithRotate: false,
       bounds: THEATRE_BOUNDS,
@@ -89,60 +121,73 @@ export class TheatreMap implements OnDestroy {
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 
-    map.on('load', () => {
-      map.addSource('grid', { type: 'geojson', data: gridLines() });
-      map.addLayer({ id: 'grid', type: 'line', source: 'grid', paint: { 'line-color': '#1a2633', 'line-width': 1 } });
+    // Overlays are wiped by every setStyle, so they are (re)added on each style load.
+    map.on('style.load', () => this.addOverlays());
+    this.applyBasemap(this.savedBasemap());
+  }
 
-      map.addSource('zones', { type: 'geojson', data: empty() });
-      map.addLayer({
-        id: 'zones-fill', type: 'fill', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dynamic'], true], 0.2, 0.12] },
-      });
-      map.addLayer({
-        id: 'zones-outline', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.8 },
-      });
-      map.addLayer({
-        id: 'corridor', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 14, 'line-opacity': 0.14 },
-      });
-      map.addLayer({
-        id: 'corridor-center', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
-        paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 1.5, 'line-dasharray': [1, 2] },
-      });
-
-      map.addSource('uncertainty', { type: 'geojson', data: empty() });
-      map.addLayer({
-        id: 'uncertainty-fill', type: 'fill', source: 'uncertainty',
-        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.1 },
-      });
-      map.addLayer({
-        id: 'uncertainty-line', type: 'line', source: 'uncertainty',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.7 },
-      });
-
-      map.addSource('paths', { type: 'geojson', data: empty() });
-      map.addLayer({
-        id: 'paths', type: 'line', source: 'paths',
-        layout: { 'line-cap': 'round' },
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': ['case', ['==', ['get', 'kind'], 'blocked'], 2.5, 3],
-          'line-dasharray': ['case', ['==', ['get', 'kind'], 'blocked'], ['literal', [2, 2]], ['literal', [1, 0]]],
-        },
-      });
-
-      map.addSource('trails', { type: 'geojson', data: empty() });
-      map.addLayer({
-        id: 'trails', type: 'line', source: 'trails',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
-      });
-
-      this.ready = true;
-      this.renderZones(this.store.zones());
-      this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
+  private addOverlays(): void {
+    const map = this.map!;
+    const real = this.basemap() === 'real';
+    map.addSource('grid', { type: 'geojson', data: gridLines() });
+    map.addLayer({
+      id: 'grid', type: 'line', source: 'grid',
+      paint: { 'line-color': real ? '#5cc8ff' : '#1a2633', 'line-width': 1, 'line-opacity': real ? 0.07 : 1 },
     });
+
+    map.addSource('zones', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'zones-fill', type: 'fill', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dynamic'], true], 0.2, 0.12] },
+    });
+    map.addLayer({
+      id: 'zones-outline', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.8 },
+    });
+    map.addLayer({
+      id: 'corridor', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 14, 'line-opacity': 0.14 },
+    });
+    map.addLayer({
+      id: 'corridor-center', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
+      paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 1.5, 'line-dasharray': [1, 2] },
+    });
+
+    map.addSource('uncertainty', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'uncertainty-fill', type: 'fill', source: 'uncertainty',
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.1 },
+    });
+    map.addLayer({
+      id: 'uncertainty-line', type: 'line', source: 'uncertainty',
+      paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.7 },
+    });
+
+    map.addSource('paths', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'paths', type: 'line', source: 'paths',
+      layout: { 'line-cap': 'round' },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['case', ['==', ['get', 'kind'], 'blocked'], 2.5, 3],
+        'line-dasharray': ['case', ['==', ['get', 'kind'], 'blocked'], ['literal', [2, 2]], ['literal', [1, 0]]],
+      },
+    });
+
+    map.addSource('trails', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'trails', type: 'line', source: 'trails',
+      paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
+    });
+
+    this.ready = true;
+    this.renderZones(this.store.zones());
+    this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
+  }
+
+  private savedBasemap(): Basemap {
+    try { return localStorage.getItem('orion.basemap') === 'grid' ? 'grid' : 'real'; } catch { return 'real'; }
   }
 
   private renderZones(zones: Zone[]): void {
@@ -165,7 +210,11 @@ export class TheatreMap implements OnDestroy {
       const anchor = z.center ?? z.waypoints?.[Math.floor((z.waypoints.length - 1) / 2)];
       if (!anchor) continue;
       seen.add(z.id);
-      if (this.zoneLabels.has(z.id)) continue;
+      const existing = this.zoneLabels.get(z.id);
+      if (existing) {
+        existing.setLngLat([anchor[1], anchor[0]]); // zones tracked by ORION can move
+        continue;
+      }
       const el = document.createElement('div');
       el.className = `zone-label zone-${z.zone_type}`;
       el.innerHTML = `<span>${escapeHtml(z.name)}</span>${z.detected_by !== 'PRECONFIGURED' ? '<em>marked by ORION</em>' : ''}`;
@@ -256,6 +305,59 @@ export class TheatreMap implements OnDestroy {
       })),
     });
   }
+}
+
+/** Fetches the real basemap style, or null when offline / slow, so the caller can fall back to the grid. */
+async function loadRealStyle(): Promise<StyleSpecification | null> {
+  try {
+    const res = await fetch(REAL_STYLE_URL, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    const style = (await res.json()) as StyleSpecification;
+    // The style ships without a credit line; OpenFreeMap and OSM require one.
+    for (const src of Object.values(style.sources)) {
+      if ('url' in src || 'tiles' in src) (src as { attribution?: string }).attribution = REAL_ATTRIBUTION;
+    }
+    return tintBasemap(style);
+  } catch {
+    return null;
+  }
+}
+
+// The stock dark style is near-black; lift it into the console palette so streets and
+// districts read clearly under the overlays. Matched by layer-id prefix, first match wins.
+const BASEMAP_TINT: [prefix: string, color: string][] = [
+  ['background', '#0e151d'],
+  ['water', '#13283c'],
+  ['waterway', '#18324b'],
+  ['landuse_residential', '#131c26'],
+  ['landcover_wood', '#122119'],
+  ['landuse_park', '#122119'],
+  ['building', '#18222d'],
+  ['highway_path', '#1b2734'],
+  ['highway_minor', '#223040'],
+  ['highway_major', '#2c3d51'],
+  ['highway_motorway', '#3a5068'],
+  ['railway', '#2a3644'],
+  ['boundary', '#3b4a5c'],
+];
+
+function tintBasemap(style: StyleSpecification): StyleSpecification {
+  for (const layer of style.layers) {
+    const tint = BASEMAP_TINT.find(([prefix]) => layer.id.startsWith(prefix))?.[1];
+    const paint = ((layer as { paint?: Record<string, unknown> }).paint ??= {});
+    if (layer.type === 'symbol') {
+      paint['text-color'] = '#7f93a8';
+      paint['text-halo-color'] = '#0b0f14';
+      paint['text-halo-width'] = 1.2;
+    } else if (tint && layer.type === 'background') {
+      paint['background-color'] = tint;
+    } else if (tint && layer.type === 'fill') {
+      paint['fill-color'] = tint;
+    } else if (tint && layer.type === 'line') {
+      paint['line-color'] = tint;
+    }
+  }
+  return style;
 }
 
 function gridLines(): FeatureCollection {

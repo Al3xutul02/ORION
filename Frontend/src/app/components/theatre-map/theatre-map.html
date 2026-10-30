@@ -7,11 +7,18 @@
   <span><i class="sw threat"></i>Threat</span>
   <span><i class="ring"></i>Uncertainty</span>
   <span><i class="path blocked"></i>RTL blocked</span>
+  @if (basemap() === 'real') {
+    <span class="note">Exercise zones over a real map</span>
+  }
 </div>
 
 <div class="overlay-tr">
   @if (store.sectorInterference()) {
     <span class="chip yellow"><span class="dot"></span>Localized interference active</span>
   }
+  <div class="seg" role="group" aria-label="Basemap">
+    <button type="button" [class.on]="basemap() === 'real'" (click)="setBasemap('real')">Real map</button>
+    <button type="button" [class.on]="basemap() === 'grid'" (click)="setBasemap('grid')">Grid</button>
+  </div>
   <button class="btn sm" type="button" (click)="recenter()">Recenter</button>
 </div>

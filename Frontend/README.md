@@ -8,7 +8,9 @@ ORION Ground Control UI (Angular 20 + MapLibre GL).
 Data sources (toggle in the top bar):
 
 - **Live**: FastAPI backend at `http://localhost:8000` (WebSocket `/ws/telemetry` + REST `/api/v1`). Point elsewhere with `?api=http://host:port`.
-- **Offline**: the same 3-minute demo timeline run in the browser (Plan B). Used automatically if the backend does not answer within 4 s. Supports 1×/2×/4× playback and a tamper test for the hash chain.
+- **Offline**: an extended version of the 3-minute exercise run in the browser (Plan B). Used automatically if the backend does not answer within 4 s. Supports 1×/2×/4× playback and a tamper test for the hash chain. On top of the backend's beats it adds a second patrol sector (6 drones), a mobile hostile jammer that ORION maps by peer consensus and tracks as it moves, and a command-link loss on D5 handled by the zone-filtered failsafe. In this mode the operator can also command any drone directly.
+
+Map: real basemap of the Craiova area (OpenStreetMap data via OpenFreeMap, no API key) with the exercise zones on top; falls back to a plain grid when offline. Toggle with **Real map / Grid**. The zones and attacks are simulated; nothing on the map is real data.
 
 The backend CORS list allows `http://localhost:4200`, so run the dev server on that port when using Live mode.
 

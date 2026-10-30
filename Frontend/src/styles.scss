@@ -246,8 +246,20 @@ button {
   }
 }
 
+// Map data credit (OpenStreetMap / OpenFreeMap) must stay visible on the real basemap.
 .maplibregl-ctrl-attrib {
-  display: none;
+  background: rgba(11, 15, 20, 0.75) !important;
+  color: var(--text-faint);
+  font-size: 10px;
+
+  a {
+    color: var(--text-dim) !important;
+  }
+
+  .maplibregl-ctrl-attrib-button {
+    filter: invert(0.85);
+    background-color: transparent;
+  }
 }
 
 .maplibregl-ctrl-scale {

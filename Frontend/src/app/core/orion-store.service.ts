@@ -15,7 +15,7 @@ export interface Toast {
   body: string;
 }
 
-type Trigger = 'spoofing' | 'replay' | 'interference';
+type Trigger = 'spoofing' | 'replay' | 'interference' | 'linkloss';
 
 const HISTORY_LEN = 90;
 
@@ -30,6 +30,10 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
   OPERATOR_COMMAND: { level: 'ok', title: 'Signed command sent' },
   MISSION_REPORT_READY: { level: 'info', title: 'Post-action report ready' },
   DRONE_RECOVERED: { level: 'ok', title: 'Drone recovered at base' },
+  GPS_DEGRADED_SINGLE: { level: 'warn', title: 'GPS lost on one drone' },
+  COMMAND_LINK_LOST: { level: 'critical', title: 'Command link lost' },
+  FAILSAFE_APPLIED: { level: 'warn', title: 'Failsafe applied' },
+  COMMAND_LINK_RESTORED: { level: 'ok', title: 'Command link restored' },
 };
 
 /**
@@ -283,8 +287,10 @@ export class OrionStore implements OnDestroy {
       if (kind === 'spoofing') this.offline.triggerSpoofing();
       if (kind === 'replay') this.offline.triggerReplay();
       if (kind === 'interference') this.offline.triggerInterference();
+      if (kind === 'linkloss') this.offline.triggerLinkLoss();
       return;
     }
+    if (kind === 'linkloss') return; // offline-only scenario beat
     const action = kind === 'spoofing' ? 'trigger-spoofing' : kind === 'replay' ? 'trigger-replay' : 'trigger-sector-interference';
     await this.call(() => this.api.simulation(action));
     this.pollLive();
@@ -434,5 +440,5 @@ export function summarise(e: AuditEvent): string {
   const d = parseDetails(e);
   const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : undefined);
   const drone = e.drone_id ? `Drone ${e.drone_id}: ` : '';
-  return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
+  return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('assessment') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
 }

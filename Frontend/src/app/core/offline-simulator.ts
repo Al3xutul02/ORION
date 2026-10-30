@@ -3,15 +3,38 @@ import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, Zone } from './models';
 
 /**
- * Plan B from the spec: the same fixed 3-minute timeline as Backend/app/services/simulator.py,
- * run entirely in the browser so the demo works when the backend or MySQL is down.
+ * Plan B from the spec, extended into a fuller (simulated, defensive) conflict exercise over
+ * the Craiova area: the backend's fixed 3-minute timeline, plus a mobile hostile jammer that
+ * ORION tracks by peer consensus and a command-link loss handled by the zone-aware failsafe.
+ * Runs entirely in the browser so the demo works when the backend or MySQL is down.
  */
 
-const CENTER = { lat: 44.335, lon: 23.83 };
-const ORBIT = { lat: 0.003, lon: 0.004 };
+interface Sector {
+  name: string;
+  center: { lat: number; lon: number };
+  orbit: { lat: number; lon: number };
+}
+
+const SECTORS: Record<'A' | 'B', Sector> = {
+  A: { name: 'Sector 4', center: { lat: 44.335, lon: 23.83 }, orbit: { lat: 0.003, lon: 0.004 } },
+  B: { name: 'Sector 7', center: { lat: 44.348, lon: 23.855 }, orbit: { lat: 0.0022, lon: 0.003 } },
+};
 const ANGULAR_SPEED = 0.08; // rad/s
 const SPOOF_OFFSET = { lat: 0.0042, lon: 0.0038 };
 const EGRESS_SPEED_MS = 22;
+
+// Hostile mobile EW emitter: enters from the south-east, crosses Sector 4, withdraws into Bravo.
+const JAMMER = {
+  path: [[44.329, 23.842], [44.335, 23.83], [44.341, 23.848]] as [number, number][],
+  speedMs: 45,
+  radiusM: 430,
+};
+
+const LINK_LOSS = { droneId: 5, durationS: 15, failsafeAfterS: 5 };
+
+const SCRIPT = { spoof: 30, recommend: 60, replay: 100, jammer: 112, linkLoss: 145, report: 160 };
+
+const DYNAMIC_ZONE_ID = 100;
 
 const INITIAL_ZONES: Zone[] = [
   { id: 1, name: 'Base Forward Alpha', zone_type: 'BASE', geometry_type: 'CIRCLE', center: [44.316, 23.8], radius_m: 350, is_active: true, detected_by: 'PRECONFIGURED' },
@@ -26,16 +49,25 @@ const INITIAL_ZONES: Zone[] = [
 
 interface SimDrone {
   id: number;
+  sector: Sector;
   angle: number;
-  lat: number;
+  lat: number; // true position (the spoof offset is applied only to what the drone reports)
   lon: number;
   spoofedAt: number | null;
   jammedAt: number | null;
+  linkLostAt: number | null;
+  failsafeDone: boolean;
   mode: 'PATROL' | 'LOITER' | 'EGRESS' | 'LANDED';
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
   egressLeg: number;
   route: 'RTL' | 'CORRIDOR';
+}
+
+interface Jammer {
+  lat: number;
+  lon: number;
+  leg: number;
 }
 
 export interface OfflineCallbacks {
@@ -54,6 +86,7 @@ export class OfflineSimulator {
   private zones: Zone[] = [];
   private recs: Recommendation[] = [];
   private milestones = new Set<string>();
+  private jammer: Jammer | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
   private commandSeq = 6;
@@ -80,20 +113,46 @@ export class OfflineSimulator {
     this.elapsed = 0;
     this.milestones.clear();
     this.recs = [];
+    this.jammer = null;
     this.zones = structuredClone(INITIAL_ZONES);
-    this.drones = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2].map((angle, i) => ({
-      id: i + 1, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null,
+    const fleet: [Sector, number][] = [
+      [SECTORS.A, 0], [SECTORS.A, Math.PI / 2], [SECTORS.A, Math.PI], [SECTORS.A, (3 * Math.PI) / 2],
+      [SECTORS.B, Math.PI / 4], [SECTORS.B, (5 * Math.PI) / 4],
+    ];
+    this.drones = fleet.map(([sector, angle], i) => ({
+      id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
       mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
     }));
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
-    this.log('SYSTEM_INITIALIZED', null, { system: 'ORION Ground Control Station', mode: 'OFFLINE_PLAN_B' });
+    this.log('SYSTEM_INITIALIZED', null, {
+      system: 'ORION Ground Control Station', mode: 'OFFLINE_PLAN_B',
+      exercise: 'Simulated defensive exercise, Craiova area', drones: this.drones.length,
+    });
     this.cb.onRecommendations([]);
     this.emit();
   }
 
   dispose(): void {
     this.stop();
+  }
+
+  /** Advances the simulation by dt seconds of mission time (the timer calls this; tests too). */
+  advance(dt: number): void {
+    this.elapsed = Math.round((this.elapsed + dt) * 10) / 10;
+
+    if (this.elapsed >= SCRIPT.spoof) this.triggerSpoofing();
+    if (this.elapsed >= SCRIPT.recommend) this.issueRecommendation();
+    if (this.elapsed >= SCRIPT.replay) this.triggerReplay();
+    if (this.elapsed >= SCRIPT.jammer) this.triggerInterference();
+    if (this.elapsed >= SCRIPT.linkLoss) this.triggerLinkLoss();
+    if (this.elapsed >= SCRIPT.report) this.markReportReady();
+
+    this.moveJammer(dt);
+    for (const d of this.drones) this.move(d, dt);
+    this.updateJamming();
+    this.updateLinks();
+    this.emit();
   }
 
   // ---- scenario triggers (also used by the manual buttons) -------------------------------
@@ -147,26 +206,34 @@ export class OfflineSimulator {
     }, 'SIMULATED_ADVERSARY');
   }
 
+  /** A hostile mobile jammer enters the theatre; ORION only sees its effect on the drones. */
   triggerInterference(): void {
-    if (this.milestones.has('interference')) return;
-    this.milestones.add('interference');
-    this.drone(1).jammedAt = this.elapsed;
-    this.drone(3).jammedAt = this.elapsed;
-    this.zones = [...this.zones, {
-      id: this.zones.length + 1, name: 'Localized EW Interference (Sector 4)', zone_type: 'INTERFERENCE',
-      geometry_type: 'CIRCLE', center: [CENTER.lat, CENTER.lon], radius_m: 650, is_active: true,
-      detected_by: 'ORION_CONSENSUS',
-    }];
-    this.log('ZONE_INTERFERENCE_MARKED', null, {
-      sector: 'Sector 4', affected_drones: [1, 3], reallocated_to: [4],
-      action: 'Dynamic EW zone mapped; patrol reallocated outside',
-    }, 'ORION_CONSENSUS');
+    if (this.milestones.has('jammer')) return;
+    this.milestones.add('jammer');
+    const [lat, lon] = JAMMER.path[0];
+    this.jammer = { lat, lon, leg: 0 };
+    this.log('EW_EMITTER_ACTIVE', null, {
+      description: 'Simulated hostile mobile jammer starts transmitting south-east of Sector 4',
+    }, 'SIMULATOR');
+  }
+
+  triggerLinkLoss(): void {
+    if (this.milestones.has('linkloss')) return;
+    const d = this.drone(LINK_LOSS.droneId);
+    if (d.mode === 'LANDED') return;
+    this.milestones.add('linkloss');
+    d.linkLostAt = this.elapsed;
+    d.failsafeDone = false;
+    this.log('COMMAND_LINK_LOST', d.id, {
+      description: 'Command link jammed: no telemetry acknowledgements',
+      failsafe_in_s: LINK_LOSS.failsafeAfterS,
+    }, 'SIMULATOR');
   }
 
   markReportReady(): void {
     if (this.milestones.has('report')) return;
     this.milestones.add('report');
-    this.log('MISSION_REPORT_READY', null, { summary: 'Demo scenario completed. Hash chain intact. Ready for export.' });
+    this.log('MISSION_REPORT_READY', null, { summary: 'Exercise completed. Hash chain intact. Ready for export.' });
   }
 
   decide(recId: number, decision: 'APPROVE' | 'REJECT', operatorId: string): { ok: boolean; message: string } {
@@ -193,6 +260,10 @@ export class OfflineSimulator {
   command(droneId: number, action: ActionOption['id'], operatorId: string): { ok: boolean; message: string } {
     const d = this.drone(droneId);
     if (!d || d.mode === 'LANDED') return { ok: false, message: `Drone ${droneId} has landed.` };
+    if (this.linkDown(d)) {
+      this.log('COMMAND_UNDELIVERABLE', droneId, { action, reason: 'Command link lost' }, operatorId);
+      return { ok: false, message: `Drone ${droneId} is out of contact; the onboard failsafe is in control.` };
+    }
     this.log('OPERATOR_COMMAND', droneId, { action, origin: 'MANUAL' }, operatorId);
     // A manual order supersedes whatever ORION was still waiting on for this drone.
     for (const rec of this.recs.filter(r => r.drone_id === droneId && r.status === 'PENDING')) {
@@ -239,12 +310,14 @@ export class OfflineSimulator {
         d.loiterUntil = this.elapsed + 8;
         d.egressPath = paths.viaCorridor;
         break;
-      case 'CONTINUE_PATROL':
+      case 'CONTINUE_PATROL': {
         // Rejoin the orbit at the nearest point instead of jumping back to the old one.
-        d.angle = Math.atan2((d.lat - CENTER.lat) / ORBIT.lat, (d.lon - CENTER.lon) / ORBIT.lon);
+        const { center, orbit } = d.sector;
+        d.angle = Math.atan2((d.lat - center.lat) / orbit.lat, (d.lon - center.lon) / orbit.lon);
         d.mode = 'PATROL';
         d.egressPath = [];
         break;
+      }
     }
     this.emit();
     return seq;
@@ -254,25 +327,119 @@ export class OfflineSimulator {
 
   private tick(): void {
     const now = performance.now();
-    const dt = ((now - this.lastTick) / 1000) * this.speed;
+    // Browsers throttle timers in background tabs; cap the step so the exercise pauses
+    // there instead of leaping a minute ahead when the tab comes back.
+    const dt = Math.min((now - this.lastTick) / 1000, 1) * this.speed;
     this.lastTick = now;
-    this.elapsed = Math.round((this.elapsed + dt) * 10) / 10;
+    this.advance(dt);
+  }
 
-    if (this.elapsed >= 30) this.triggerSpoofing();
-    if (this.elapsed >= 60) this.issueRecommendation();
-    if (this.elapsed >= 100) this.triggerReplay();
-    if (this.elapsed >= 130) this.triggerInterference();
-    if (this.elapsed >= 160) this.markReportReady();
+  private moveJammer(dt: number): void {
+    const j = this.jammer;
+    if (!j) return;
+    let budget = JAMMER.speedMs * dt;
+    while (budget > 0 && j.leg < JAMMER.path.length - 1) {
+      const [tLat, tLon] = JAMMER.path[j.leg + 1];
+      const dist = distanceM(j.lat, j.lon, tLat, tLon);
+      if (dist <= budget) {
+        j.lat = tLat; j.lon = tLon; j.leg++; budget -= dist;
+      } else {
+        const f = budget / dist;
+        j.lat += (tLat - j.lat) * f; j.lon += (tLon - j.lon) * f;
+        budget = 0;
+      }
+    }
+  }
 
-    for (const d of this.drones) this.move(d, dt);
-    this.emit();
+  /**
+   * Drones inside the emitter's range lose GPS. ORION never sees the emitter itself: one
+   * degraded drone is treated as a local fault; two or more at once means a zone, which is
+   * mapped around the affected drones and tracked as they change.
+   */
+  private updateJamming(): void {
+    const j = this.jammer;
+    const affected: SimDrone[] = [];
+    for (const d of this.drones) {
+      const inRange = !!j && d.mode !== 'LANDED' && distanceM(d.lat, d.lon, j.lat, j.lon) <= JAMMER.radiusM;
+      if (inRange && d.jammedAt === null) d.jammedAt = this.elapsed;
+      if (!inRange && d.jammedAt !== null) {
+        d.jammedAt = null;
+        this.log('GPS_RESTORED', d.id, { description: 'Satellite fix reacquired' });
+      }
+      if (inRange) affected.push(d);
+    }
+
+    if (affected.length === 1 && !this.milestones.has('single-fault')) {
+      this.milestones.add('single-fault');
+      this.log('GPS_DEGRADED_SINGLE', affected[0].id, {
+        assessment: 'Peers nominal: treated as a drone-level fault, no zone marked yet',
+      }, 'ORION_CONSENSUS');
+    }
+
+    if (affected.length < 2) return;
+    const lat = affected.reduce((s, d) => s + d.lat, 0) / affected.length;
+    const lon = affected.reduce((s, d) => s + d.lon, 0) / affected.length;
+    const radius = Math.max(350, ...affected.map(d => distanceM(lat, lon, d.lat, d.lon) + 220));
+    const existing = this.zones.find(z => z.id === DYNAMIC_ZONE_ID);
+    if (existing) {
+      // Smooth the estimate so the zone glides instead of jumping between ticks.
+      const [pLat, pLon] = existing.center!;
+      existing.center = [pLat + (lat - pLat) * 0.25, pLon + (lon - pLon) * 0.25];
+      existing.radius_m = existing.radius_m! + (radius - existing.radius_m!) * 0.25;
+      this.zones = [...this.zones];
+      return;
+    }
+
+    this.milestones.add('interference');
+    this.zones = [...this.zones, {
+      id: DYNAMIC_ZONE_ID, name: 'Mobile EW Interference (estimated)', zone_type: 'INTERFERENCE',
+      geometry_type: 'CIRCLE', center: [lat, lon], radius_m: radius, is_active: true, detected_by: 'ORION_CONSENSUS',
+    }];
+    const affectedIds = affected.map(d => d.id);
+    const reallocatedTo = this.drones
+      .filter(d => !affectedIds.includes(d.id) && d.spoofedAt === null && d.mode !== 'LANDED')
+      .map(d => d.id);
+    this.log('ZONE_INTERFERENCE_MARKED', null, {
+      sector: affected[0].sector.name, affected_drones: affectedIds, reallocated_to: reallocatedTo,
+      action: 'Consensus: several drones lost GPS together. EW zone mapped and tracked; patrol reallocated outside',
+    }, 'ORION_CONSENSUS');
+  }
+
+  /** Link-loss policy from the spec: after N seconds, apply RTL or loiter, filtered by zone rules. */
+  private updateLinks(): void {
+    for (const d of this.drones) {
+      if (d.linkLostAt === null) continue;
+      const down = this.elapsed - d.linkLostAt;
+      if (!d.failsafeDone && down >= LINK_LOSS.failsafeAfterS && d.mode !== 'LANDED') {
+        d.failsafeDone = true;
+        const state = this.states().find(s => s.drone_id === d.id)!;
+        const rtl = evaluateActions(state, this.zones).find(a => a.id === 'RETURN_TO_HOME')!;
+        const applied = rtl.allowed ? 'RETURN_TO_HOME' : 'LOITER';
+        this.log('FAILSAFE_APPLIED', d.id, {
+          policy: 'RETURN_TO_HOME', applied, link_lost_s: Math.round(down),
+          reason: rtl.allowed ? 'Path to base is clear' : `RTL blocked by zone rules: ${rtl.reason}. Holding position instead`,
+        }, 'ORION_FAILSAFE');
+        this.dispatch(d.id, applied, 'ORION_FAILSAFE');
+      }
+      if (down >= LINK_LOSS.durationS) {
+        d.linkLostAt = null;
+        this.log('COMMAND_LINK_RESTORED', d.id, {
+          description: 'Link back. Drone keeps its failsafe action until the operator decides',
+        });
+      }
+    }
+  }
+
+  private linkDown(d: SimDrone): boolean {
+    return d.linkLostAt !== null;
   }
 
   private move(d: SimDrone, dt: number): void {
     if (d.mode === 'PATROL') {
+      const { center, orbit } = d.sector;
       d.angle += ANGULAR_SPEED * dt;
-      d.lat = CENTER.lat + ORBIT.lat * Math.sin(d.angle);
-      d.lon = CENTER.lon + ORBIT.lon * Math.cos(d.angle);
+      d.lat = center.lat + orbit.lat * Math.sin(d.angle);
+      d.lon = center.lon + orbit.lon * Math.cos(d.angle);
       return;
     }
     if (d.mode === 'LOITER') {
@@ -281,7 +448,7 @@ export class OfflineSimulator {
     }
     if (d.mode === 'EGRESS') {
       let budget = EGRESS_SPEED_MS * dt;
-      // Positions here are the drone's own (spoofed) frame; strip the offset while moving.
+      // Egress paths are in the drone's reported (possibly spoofed) frame; strip the offset while moving.
       const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
       while (budget > 0 && d.egressLeg < d.egressPath.length - 1) {
         const [tLon, tLat] = d.egressPath[d.egressLeg + 1];
@@ -308,10 +475,12 @@ export class OfflineSimulator {
     return this.drones.map(d => {
       const spoofed = d.spoofedAt !== null;
       const jammed = d.jammedAt !== null;
+      const linkLost = this.linkDown(d);
       let lat = d.lat, lon = d.lon;
       let fix = 3, sats = 12, eph = 1.0, drop = 0.5, rssi = 95;
       if (spoofed) { lat += SPOOF_OFFSET.lat; lon += SPOOF_OFFSET.lon; sats = 4; eph = 4.2; fix = 2; }
       if (jammed) { sats = 3; fix = 1; eph = 6.0; drop = 35; rssi = 25; }
+      if (linkLost) { drop = 95; rssi = 3; }
 
       let gps = fix < 2 ? 0 : fix === 2 ? 40 : 100;
       if (sats < 4) gps = Math.min(gps, 10); else if (sats < 6) gps = Math.min(gps, 40); else if (sats < 9) gps = Math.min(gps, 75);
@@ -330,15 +499,21 @@ export class OfflineSimulator {
         const t = this.elapsed - d.jammedAt!;
         imu = Math.min(imu, 70);
         unc = Math.max(unc, Math.min(260, 30 + t * 4));
-        consensus = Math.min(consensus, 60);
-        reasons.push('GPS lost, dead reckoning active', 'Peers in same sector degraded: localized interference');
+        const peersHit = this.drones.filter(p => p !== d && p.jammedAt !== null).length;
+        consensus = Math.min(consensus, peersHit ? 60 : 85);
+        reasons.push(
+          'GPS lost, dead reckoning active',
+          peersHit ? 'Peers in same area degraded: localized interference' : 'Peers nominal: drone-level fault',
+        );
       }
       if (sats < 6 && !spoofed && !jammed) reasons.push('Low satellite count');
       const link = Math.max(0, Math.min(100, rssi, 100 - drop * 2));
-      if (link < 60) reasons.push('Command link degraded');
+      if (linkLost) reasons.push('Command link lost: onboard failsafe in control');
+      else if (link < 60) reasons.push('Command link degraded');
 
       let score = 0.3 * gps + 0.3 * imu + 0.2 * link + 0.2 * consensus;
       if (imu <= 20 || unc >= 100) score = Math.min(score, 35);
+      if (linkLost) score = Math.min(score, 55); // position may be fine, but we can't steer it
       score = Math.round(Math.max(0, Math.min(100, score)) * 10) / 10;
       const status: TrustStatus = score >= 75 ? 'GREEN' : score >= 40 ? 'YELLOW' : 'RED';
       const reason = reasons.length ? reasons.join('; ') : 'Sensors & consensus nominal';
@@ -373,7 +548,8 @@ export class OfflineSimulator {
   }
 
   private log(type: string, droneId: number | null, details: Record<string, unknown>, operator = 'SYSTEM'): void {
-    this.ledger.append(type, droneId, details, operator).then(() => this.cb.onLedger());
+    const withTime = { ...details, mission_time_s: this.elapsed };
+    this.ledger.append(type, droneId, withTime, operator).then(() => this.cb.onLedger());
   }
 
   private drone(id: number): SimDrone {

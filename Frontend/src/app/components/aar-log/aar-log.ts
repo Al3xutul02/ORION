@@ -14,6 +14,15 @@ const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
   OPERATOR_APPROVAL: 'ok',
   COMMAND_EXECUTED: 'ok',
   DRONE_RECOVERED: 'ok',
+  COMMAND_LINK_LOST: 'critical',
+  EW_EMITTER_ACTIVE: 'critical',
+  GPS_DEGRADED_SINGLE: 'warn',
+  FAILSAFE_APPLIED: 'warn',
+  COMMAND_UNDELIVERABLE: 'warn',
+  RECOMMENDATION_SUPERSEDED: 'warn',
+  OPERATOR_COMMAND: 'ok',
+  GPS_RESTORED: 'ok',
+  COMMAND_LINK_RESTORED: 'ok',
 };
 
 @Component({

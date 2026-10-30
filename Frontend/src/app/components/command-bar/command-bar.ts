@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { ORION_CONFIG } from '../../core/config';
-import { SCENARIO } from '../../core/models';
+import { SCENARIO, SCENARIO_EXTENDED } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 
 const DEMO_LENGTH_S = 180;
@@ -15,7 +15,7 @@ const DEMO_LENGTH_S = 180;
 })
 export class CommandBar {
   protected store = inject(OrionStore);
-  protected scenario = SCENARIO;
+  protected scenario = computed(() => (this.store.mode() === 'offline' ? SCENARIO_EXTENDED : SCENARIO));
   protected apiBase = ORION_CONFIG.apiBase;
   protected speeds = [1, 2, 4];
 
@@ -32,6 +32,7 @@ export class CommandBar {
 
   protected currentStep = computed(() => {
     const t = this.store.elapsed();
-    return [...SCENARIO].reverse().find(s => t >= s.at) ?? SCENARIO[0];
+    const steps = this.scenario();
+    return [...steps].reverse().find(s => t >= s.at) ?? steps[0];
   });
 }
