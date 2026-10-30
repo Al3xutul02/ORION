@@ -129,6 +129,25 @@ export interface ExportReport {
   summary: Record<string, unknown>;
 }
 
+// Read-only AAR copilot (Backend/app/api/endpoints/copilot.py)
+export interface CopilotAnswer {
+  answer: string;
+  cited_ids: number[];
+  refused: boolean;
+  model: string;
+  source: 'server' | 'client';
+  chain_valid: boolean;
+  records: number;
+}
+
+export interface CopilotMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  citedIds?: number[];
+  error?: boolean;
+  meta?: string;
+}
+
 export interface ScenarioStep {
   at: number; // seconds
   label: string;

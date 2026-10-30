@@ -21,7 +21,13 @@
 
   <div class="panel-body log">
     @for (e of rows(); track e.id) {
-      <div class="row sev-{{ severity(e) }}" [class.broken]="isBroken(e)">
+      <div
+        class="row sev-{{ severity(e) }}"
+        [class.broken]="isBroken(e)"
+        [class.cited]="isCited(e)"
+        [attr.data-event-id]="e.id"
+      >
+        <span class="id mono">#{{ e.id }}</span>
         <span class="time mono">{{ e.timestamp | date: 'HH:mm:ss' }}</span>
         <span class="type">{{ e.event_type }}</span>
         <span class="text">{{ summary(e) }}</span>

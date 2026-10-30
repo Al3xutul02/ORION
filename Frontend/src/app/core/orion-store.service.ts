@@ -3,8 +3,9 @@ import { ORION_CONFIG } from './config';
 import { ActionOption, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
-  AuditEvent, ChainVerification, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
+  AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
 } from './models';
+import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi } from './orion-api.service';
 
@@ -60,6 +61,10 @@ export class OrionStore implements OnDestroy {
   readonly speed = signal(1);
   readonly muted = signal(this.savedMuted());
   readonly busy = signal(false);
+  readonly copilot = signal<CopilotMessage[]>([]);
+  readonly copilotBusy = signal(false);
+  /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
+  readonly highlightedEvents = signal<number[]>([]);
 
   readonly selectedDrone = computed(() => this.drones().find(d => d.drone_id === this.selectedDroneId()) ?? null);
   readonly pendingRecommendations = computed(() => this.recommendations().filter(r => r.status === 'PENDING'));
@@ -108,6 +113,7 @@ export class OrionStore implements OnDestroy {
     this.recommendations.set([]);
     this.verification.set(null);
     this.trustHistory.set({});
+    this.clearCopilot();
     this.lastAlertedId = 0;
     this.elapsed.set(0);
     if (mode === 'live') this.connectLive(allowFallback);
@@ -272,6 +278,7 @@ export class OrionStore implements OnDestroy {
     this.trustHistory.set({});
     this.verification.set(null);
     this.toasts.set([]);
+    this.clearCopilot();
     this.lastAlertedId = 0;
     if (this.offline) {
       this.offline.reset();
@@ -369,6 +376,58 @@ export class OrionStore implements OnDestroy {
     };
   }
 
+  /**
+   * Asks the read-only copilot about the mission. It answers only from the hash-chained log
+   * (plus the live fleet snapshot) and cites record ids; it can't send commands.
+   */
+  async askCopilot(question: string): Promise<void> {
+    const q = question.trim();
+    if (!q || this.copilotBusy()) return;
+    const history = this.copilot()
+      .filter(m => !m.error)
+      .map(m => ({ role: m.role, content: m.text }));
+    this.copilot.update(ms => [...ms, { role: 'user', text: q }]);
+    this.copilotBusy.set(true);
+    try {
+      const fleet = this.drones().map(d => ({
+        drone_id: d.drone_id, trust_score: d.trust_score, trust_status: d.trust_status,
+        flight_mode: d.flight_mode, reason: d.reason,
+      }));
+      const body: Parameters<OrionApi['copilotAsk']>[0] = { question: q, history, fleet, elapsed_s: this.elapsed() };
+      if (this.offline) {
+        // The offline ledger only exists in this browser: send it, with our own chain check.
+        const events = this.offline.ledger.events;
+        body.events = events.map(({ prev_hash: _p, curr_hash: _c, ...rest }) => rest);
+        body.chain_valid = (await verifyChain(events)).is_valid;
+      }
+      const res = await this.api.copilotAsk(body);
+      this.copilot.update(ms => [...ms, {
+        role: 'assistant',
+        text: res.answer,
+        citedIds: res.cited_ids,
+        meta: `${res.records} records · chain ${res.chain_valid ? 'verified' : 'BROKEN'} · ${res.model}`,
+      }]);
+    } catch (err) {
+      // Mark the question too, so a failed exchange isn't replayed as history next time.
+      this.copilot.update(ms => [
+        ...ms.slice(0, -1),
+        { ...ms[ms.length - 1], error: true },
+        { role: 'assistant', text: copilotError(err), error: true },
+      ]);
+    } finally {
+      this.copilotBusy.set(false);
+    }
+  }
+
+  clearCopilot(): void {
+    this.copilot.set([]);
+    this.highlightedEvents.set([]);
+  }
+
+  highlightEvents(ids: number[]): void {
+    this.highlightedEvents.set(ids);
+  }
+
   selectDrone(id: number | null): void {
     this.selectedDroneId.set(id);
   }
@@ -441,4 +500,15 @@ export function summarise(e: AuditEvent): string {
   const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : undefined);
   const drone = e.drone_id ? `Drone ${e.drone_id}: ` : '';
   return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('assessment') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
+}
+
+function copilotError(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    if (err.status === 0) {
+      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and ANTHROPIC_API_KEY) to ask questions.`;
+    }
+    if (typeof err.error?.detail === 'string') return err.error.detail;
+    return `Copilot error (${err.status}).`;
+  }
+  return 'Copilot error.';
 }

@@ -95,6 +95,19 @@ Toate cele 14 teste verifică:
 4. Semnarea MAVLink 2 și respingerea tentativelor de replay attack.
 5. Endpoint-urile REST și formatul GeoJSON pentru MapLibre GL.
 
+`tests/test_copilot.py` adaugă 7 teste pentru copilot (cu un client Claude simulat, fără apeluri reale).
+
+---
+
+## 🤖 Copilot AAR (doar citire)
+
+`POST /api/v1/copilot/ask` răspunde la întrebări despre misiune **doar din jurnalul cu lanț de hash** și citează înregistrările (`[#12]`). Nu are unelte, nu trimite comenzi și nu scrie nimic. Citările inexistente în jurnal sunt eliminate de server.
+
+- Necesită **Python 3.10+** (SDK-ul `anthropic`) și acces la internet.
+- Cheia: `ANTHROPIC_API_KEY` în `.env` sau în mediu. Fără cheie, endpoint-ul răspunde `503` cu un mesaj clar; restul aplicației funcționează normal.
+- Model: `COPILOT_MODEL` (implicit `claude-opus-5-5`), efort: `COPILOT_EFFORT` (implicit `low`, pentru răspunsuri rapide). Fallback-ul server-side (`fallbacks: "default"`) este activat.
+- În modul Offline, frontend-ul trimite propriul jurnal din browser (`events`) și rezultatul verificării lanțului (`chain_valid`).
+
 ---
 
 ## 📡 MAVLink 2 & Protocol

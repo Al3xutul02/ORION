@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { AuditEvent } from '../../core/models';
@@ -37,6 +37,23 @@ export class AarLog {
   protected verifying = signal(false);
 
   protected rows = computed(() => [...this.store.events()].reverse());
+  private host = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  constructor() {
+    // Bring the first record the copilot cited into view.
+    effect(() => {
+      const ids = this.store.highlightedEvents();
+      if (!ids.length) return;
+      queueMicrotask(() => {
+        const rows = [...this.host.nativeElement.querySelectorAll<HTMLElement>('[data-event-id]')];
+        rows.find(r => ids.includes(Number(r.dataset['eventId'])))?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    });
+  }
+
+  protected isCited(e: AuditEvent): boolean {
+    return this.store.highlightedEvents().includes(e.id);
+  }
 
   protected severity(e: AuditEvent): string {
     return SEVERITY[e.event_type] ?? 'info';

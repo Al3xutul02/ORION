@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     SIMULATION_DRONE_COUNT: int = 4
     SIMULATION_TICK_RATE_HZ: float = 2.0
     SIMULATION_DEMO_ENABLED: bool = True
+
+    # Read-only AAR copilot (Claude API). Without a key here, the SDK falls back to the
+    # ANTHROPIC_API_KEY environment variable or an `ant auth login` profile.
+    ANTHROPIC_API_KEY: Optional[str] = None
+    COPILOT_MODEL: str = "claude-opus-5-5"
+    COPILOT_EFFORT: str = "low"  # low | medium | high; low keeps chat answers quick
 
 
 settings = Settings()

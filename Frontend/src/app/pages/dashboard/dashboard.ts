@@ -1,26 +1,30 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { AarLog } from '../../components/aar-log/aar-log';
+import { CopilotPanel } from '../../components/copilot-panel/copilot-panel';
 import { DecisionPanel } from '../../components/decision-panel/decision-panel';
 import { FleetPanel } from '../../components/fleet-panel/fleet-panel';
 import { TheatreMap } from '../../components/theatre-map/theatre-map';
 
 @Component({
   selector: 'app-dashboard',
-  imports: [FleetPanel, TheatreMap, DecisionPanel, AarLog],
+  imports: [FleetPanel, TheatreMap, DecisionPanel, AarLog, CopilotPanel],
   template: `
     <app-fleet-panel class="fleet" />
     <app-theatre-map class="map" />
     <app-decision-panel class="decisions" />
-    <app-aar-log class="log" />
+    <div class="bottom">
+      <app-aar-log />
+      <app-copilot-panel />
+    </div>
   `,
   styles: `
     :host {
       display: grid;
       grid-template-columns: minmax(280px, 330px) minmax(0, 1fr) minmax(300px, 360px);
-      grid-template-rows: minmax(0, 1fr) 230px;
+      grid-template-rows: minmax(0, 1fr) 280px;
       grid-template-areas:
         'fleet map decisions'
-        'log   log decisions';
+        'bottom bottom decisions';
       gap: 10px;
       padding: 10px;
       height: 100%;
@@ -29,16 +33,22 @@ import { TheatreMap } from '../../components/theatre-map/theatre-map';
     .fleet { grid-area: fleet; }
     .map { grid-area: map; }
     .decisions { grid-area: decisions; }
-    .log { grid-area: log; }
+    .bottom {
+      grid-area: bottom;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+      gap: 10px;
+      min-height: 0;
+    }
 
     @media (max-width: 1200px) {
       :host {
         grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-        grid-template-rows: 520px auto 260px;
+        grid-template-rows: 520px auto 300px;
         grid-template-areas:
           'fleet map'
           'decisions decisions'
-          'log log';
+          'bottom bottom';
         height: auto;
       }
     }
@@ -46,8 +56,12 @@ import { TheatreMap } from '../../components/theatre-map/theatre-map';
     @media (max-width: 760px) {
       :host {
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: 420px auto auto 300px;
-        grid-template-areas: 'map' 'fleet' 'decisions' 'log';
+        grid-template-rows: 420px auto auto auto;
+        grid-template-areas: 'map' 'fleet' 'decisions' 'bottom';
+      }
+      .bottom {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: 300px 380px;
       }
     }
   `,

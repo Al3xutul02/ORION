@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ORION_CONFIG } from './config';
-import { AuditEvent, ChainVerification, DecisionResult, ExportReport, Recommendation } from './models';
+import { AuditEvent, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
 
 /** REST client for the FastAPI backend (Backend/app/api/endpoints). */
 @Injectable({ providedIn: 'root' })
@@ -43,6 +43,17 @@ export class OrionApi {
 
   simulation(action: 'start' | 'stop' | 'reset' | 'trigger-spoofing' | 'trigger-replay' | 'trigger-sector-interference') {
     return firstValueFrom(this.http.post<{ status: string }>(`${this.base}/simulation/${action}`, {}));
+  }
+
+  copilotAsk(body: {
+    question: string;
+    history: { role: 'user' | 'assistant'; content: string }[];
+    events?: Omit<AuditEvent, 'prev_hash' | 'curr_hash'>[];
+    chain_valid?: boolean;
+    fleet?: Record<string, unknown>[];
+    elapsed_s?: number;
+  }) {
+    return firstValueFrom(this.http.post<CopilotAnswer>(`${this.base}/copilot/ask`, body));
   }
 
   simulationStatus() {

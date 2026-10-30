@@ -1,0 +1,78 @@
+<section class="panel">
+  <header class="panel-head">
+    <h2>Ask ORION</h2>
+    <span class="chip accent" title="No tools, no commands: it only reads the hash-chained log">Read-only</span>
+    <span class="spacer"></span>
+    @if (store.copilot().length) {
+      <button class="btn sm ghost" type="button" (click)="store.clearCopilot()">Clear</button>
+    }
+  </header>
+
+  <div class="thread" #thread aria-live="polite">
+    @for (m of store.copilot(); track $index) {
+      <div class="msg {{ m.role }}" [class.error]="m.error">
+        @if (m.role === 'user') {
+          <p>{{ m.text }}</p>
+        } @else {
+          <p>
+            @for (s of segments(m); track $index) {
+              @switch (s.kind) {
+                @case ('cite') {
+                  <button
+                    type="button"
+                    class="cite mono"
+                    [class.on]="isHighlighted(s.id)"
+                    [title]="'Show record #' + s.id + ' in the log'"
+                    (click)="store.highlightEvents([s.id])"
+                  >#{{ s.id }}</button>
+                }
+                @case ('fleet') {
+                  <span class="cite fleet mono" title="Live fleet snapshot, not part of the hash chain">fleet</span>
+                }
+                @default {
+                  <span>{{ s.text }}</span>
+                }
+              }
+            }
+          </p>
+          @if (m.citedIds?.length) {
+            <div class="foot">
+              <button type="button" class="link" (click)="store.highlightEvents(m.citedIds!)">
+                {{ m.citedIds!.length === 1 ? 'Show the source in the log' : 'Show all ' + m.citedIds!.length + ' sources in the log' }}
+              </button>
+              @if (m.meta) {
+                <span class="meta mono">{{ m.meta }}</span>
+              }
+            </div>
+          } @else if (m.meta) {
+            <div class="foot"><span class="meta mono">{{ m.meta }}</span></div>
+          }
+        }
+      </div>
+    } @empty {
+      <div class="intro">
+        <p>Ask about what happened in the mission. Answers come only from the after-action log, and every claim cites the record it rests on.</p>
+        <div class="suggest">
+          @for (s of suggestions(); track s) {
+            <button type="button" class="btn sm" (click)="send(s)">{{ s }}</button>
+          }
+        </div>
+      </div>
+    }
+    @if (store.copilotBusy()) {
+      <div class="msg assistant thinking"><span class="dots" aria-label="Thinking"><i></i><i></i><i></i></span></div>
+    }
+  </div>
+
+  <form class="ask" (submit)="$event.preventDefault(); send()">
+    <textarea
+      rows="1"
+      placeholder="Ask about the mission…"
+      aria-label="Question for the copilot"
+      [value]="draft()"
+      (input)="draft.set($any($event.target).value)"
+      (keydown)="onKeydown($event)"
+    ></textarea>
+    <button class="btn primary sm" type="submit" [disabled]="!draft().trim() || store.copilotBusy()">Ask</button>
+  </form>
+</section>
