@@ -1,7 +1,7 @@
 # ==============================================================================
 # Project ORION - Root .gitignore
 # Craiova Hackathon V2.0 (Critical Infrastructure and Operations)
-# Architecture: FastAPI Backend (Python/MySQL/MAVLink) + React Frontend (Vite/TS/Sass)
+# Architecture: FastAPI Backend (Python/MySQL/MAVLink) + Angular Frontend (TS/SCSS)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -67,16 +67,28 @@ htmlcov/
 .ruff_cache/
 
 # ------------------------------------------------------------------------------
-# Node.js & React Frontend (Vite, TypeScript, Sass)
+# Angular & Node.js Frontend (TypeScript, SCSS)
 # ------------------------------------------------------------------------------
 node_modules/
 Frontend/node_modules/
 dist/
 Frontend/dist/
-dist-ssr/
-Frontend/dist-ssr/
+tmp/
+Frontend/tmp/
+out-tsc/
+Frontend/out-tsc/
+bazel-out/
+/.angular/cache
+Frontend/.angular/
+.angular/
+.sass-cache/
+/connect.lock
+/coverage
+Frontend/coverage/
+/libpeerconnection.log
+testem.log
+/typings
 *.tsbuildinfo
-.oxlint-cache
 
 # Package Manager Logs
 npm-debug.log*
@@ -152,15 +164,22 @@ Frontend/.idea/
 *.iws
 *.iml
 
-# VS Code
+# Visual Studio Code
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+.history/*
 
 # Visual Studio / Windows tools
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
+*.project
+*.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace

@@ -13,7 +13,7 @@ ORION este o stație de control la sol (Ground Control Station) pentru drone pro
 ## Arhitectură
 
 - **Backend**: Python 3.11, FastAPI, WebSocket, pymavlink, MySQL
-- **Frontend**: React 19, TypeScript, Sass, MapLibre GL, Vite
+- **Frontend**: Angular, TypeScript, SCSS, MapLibre GL
 - **Protocol**: MAVLink 2 (telemetrie și comenzi semnate)
 
 ## Licență
