@@ -268,7 +268,9 @@ class OrionFleetSimulator:
                         "trust_status": score_breakdown.trust_status,
                         "uncertainty_radius_m": score_breakdown.uncertainty_radius_m,
                         "reason": score_breakdown.reason,
-                        "scores": score_breakdown.model_dump(),
+                        # mode="json" turns the timestamp into a string; a raw datetime makes
+                        # send_json fail and the WebSocket manager drops every client.
+                        "scores": score_breakdown.model_dump(mode="json"),
                         "last_updated": datetime.now(timezone.utc).isoformat()
                     }
                     drone_states.append(state_dict)
