@@ -351,7 +351,14 @@ export class TheatreMap implements OnDestroy {
     for (const z of zones) {
       if (!z.is_active) continue;
       const props = { id: z.id, name: z.name, zone_type: z.zone_type, color: ZONE_COLORS[z.zone_type] ?? '#888', dynamic: z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS' };
-      if (z.geometry_type === 'CIRCLE' && z.center && z.radius_m) {
+      if (z.zone_type === 'SAFE_CORRIDOR') {
+        // Safe corridors are strictly flight lines followed by RTL return algorithms
+        features.push({
+          type: 'Feature',
+          properties: props,
+          geometry: { type: 'LineString', coordinates: (z.waypoints ?? []).map(([la, lo]) => [lo, la]) },
+        });
+      } else if (z.geometry_type === 'CIRCLE' && z.center && z.radius_m) {
         if (z.zone_type === 'WEATHER') {
           const kind = z.weather ?? 'STORM';
           const outerRing = weatherPolygon(z.center[0], z.center[1], z.radius_m, kind, z.id);
@@ -373,7 +380,7 @@ export class TheatreMap implements OnDestroy {
             geometry: { type: 'Polygon', coordinates: [circleRing(z.center[0], z.center[1], z.radius_m)] },
           });
         }
-      } else if ((z.geometry_type === 'POLYGON' || z.zone_type === 'OBJECTIVE' || z.zone_type === 'THREAT') && z.waypoints?.length) {
+      } else if ((z.zone_type === 'OBJECTIVE' || z.zone_type === 'THREAT') && z.waypoints?.length) {
         const ring = z.waypoints.map(([la, lo]) => [lo, la]);
         if (ring.length >= 3) {
           if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) {
