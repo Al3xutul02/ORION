@@ -588,7 +588,7 @@ export function summarise(e: AuditEvent): string {
 function copilotError(err: unknown): string {
   if (err instanceof HttpErrorResponse) {
     if (err.status === 0) {
-      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and ANTHROPIC_API_KEY) to ask questions.`;
+      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and GEMINI_API_KEY) to ask questions.`;
     }
     if (typeof err.error?.detail === 'string') return err.error.detail;
     return `Copilot error (${err.status}).`;

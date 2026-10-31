@@ -103,9 +103,9 @@ Toate cele 14 teste verifică:
 
 `POST /api/v1/copilot/ask` răspunde la întrebări despre misiune **doar din jurnalul cu lanț de hash** și citează înregistrările (`[#12]`). Nu are unelte, nu trimite comenzi și nu scrie nimic. Citările inexistente în jurnal sunt eliminate de server.
 
-- Necesită **Python 3.10+** (SDK-ul `anthropic`) și acces la internet.
-- Cheia: `ANTHROPIC_API_KEY` în `.env` sau în mediu. Fără cheie, endpoint-ul răspunde `503` cu un mesaj clar; restul aplicației funcționează normal.
-- Model: `COPILOT_MODEL` (implicit `claude-opus-5-5`), efort: `COPILOT_EFFORT` (implicit `low`, pentru răspunsuri rapide). Fallback-ul server-side (`fallbacks: "default"`) este activat.
+- Folosește **Gemini API** (SDK-ul `google-genai`) și necesită acces la internet.
+- Cheia: `GEMINI_API_KEY` în `.env` sau în mediu (se creează gratuit din [Google AI Studio](https://aistudio.google.com/apikey)). Fără cheie, endpoint-ul răspunde `503` cu un mesaj clar; restul aplicației funcționează normal.
+- Model: `COPILOT_MODEL` (implicit `gemini-3.8-flash`), nivel de gândire: `COPILOT_EFFORT` (`low` / `medium` / `high`, implicit `low`, pentru răspunsuri rapide).
 - În modul Offline, frontend-ul trimite propriul jurnal din browser (`events`) și rezultatul verificării lanțului (`chain_valid`).
 
 ---

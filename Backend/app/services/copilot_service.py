@@ -3,7 +3,9 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import anthropic
+import httpx
+from google import genai
+from google.genai import errors, types
 
 from app.core.config import settings
 
@@ -25,6 +27,14 @@ Rules:
 CITATION_RE = re.compile(r"\[#(\d+)\]")
 MAX_RECORDS = 400
 MAX_HISTORY_TURNS = 6
+
+
+THINKING_LEVEL = {"low": types.ThinkingLevel.LOW, "medium": types.ThinkingLevel.MEDIUM, "high": types.ThinkingLevel.HIGH}
+BLOCKED = {
+    types.FinishReason.SAFETY, types.FinishReason.PROHIBITED_CONTENT,
+    types.FinishReason.BLOCKLIST, types.FinishReason.SPII,
+}
+NOT_CONFIGURED = "Copilot is not configured: set GEMINI_API_KEY for the backend."
 
 
 class CopilotUnavailable(Exception):
@@ -66,16 +76,20 @@ def format_fleet(fleet: List[Dict[str, Any]], elapsed_s: Optional[float]) -> str
 
 class CopilotService:
     def __init__(self) -> None:
-        self._client: Optional[anthropic.Anthropic] = None
+        self._client: Optional[genai.Client] = None
 
-    def _get_client(self) -> anthropic.Anthropic:
+    def _get_client(self) -> genai.Client:
         if self._client is None:
             # A key in .env reaches us through settings (pydantic doesn't export it to the process
-            # environment); otherwise the SDK resolves ANTHROPIC_API_KEY or an `ant auth login` profile.
-            if settings.ANTHROPIC_API_KEY:
-                self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY, timeout=60.0)
-            else:
-                self._client = anthropic.Anthropic(timeout=60.0)
+            # environment); otherwise the SDK reads GEMINI_API_KEY / GOOGLE_API_KEY from the environment.
+            options = types.HttpOptions(timeout=60_000)  # milliseconds
+            try:
+                if settings.GEMINI_API_KEY:
+                    self._client = genai.Client(api_key=settings.GEMINI_API_KEY, http_options=options)
+                else:
+                    self._client = genai.Client(http_options=options)
+            except ValueError as e:  # no key anywhere
+                raise CopilotUnavailable(NOT_CONFIGURED) from e
         return self._client
 
     def ask(
@@ -96,60 +110,65 @@ class CopilotService:
         if fleet:
             context += f"\n\n<fleet>\n{format_fleet(fleet, elapsed_s)}\n</fleet>"
 
-        messages: List[Dict[str, Any]] = [
-            {"role": m["role"], "content": m["content"]}
-            for m in history[-MAX_HISTORY_TURNS:]
+        turns = [
+            m for m in history[-MAX_HISTORY_TURNS:]
             if m.get("role") in ("user", "assistant") and m.get("content")
         ]
-        # The API needs the conversation to start with a user turn.
-        while messages and messages[0]["role"] != "user":
-            messages.pop(0)
-        messages.append({"role": "user", "content": question})
+        # The conversation has to start with a user turn.
+        while turns and turns[0]["role"] != "user":
+            turns.pop(0)
+        contents = [
+            types.Content(role="model" if m["role"] == "assistant" else "user", parts=[types.Part(text=m["content"])])
+            for m in turns
+        ]
+        contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
         try:
-            response = self._get_client().beta.messages.create(
+            response = self._get_client().models.generate_content(
                 model=settings.COPILOT_MODEL,
-                max_tokens=16000,
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                output_config={"effort": settings.COPILOT_EFFORT},
-                system=[
-                    {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": context},
-                ],
-                messages=messages,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=[SYSTEM_PROMPT, context],
+                    max_output_tokens=16000,
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level=THINKING_LEVEL.get(settings.COPILOT_EFFORT, types.ThinkingLevel.LOW)
+                    ),
+                ),
             )
-        except anthropic.AuthenticationError as e:
-            raise CopilotUnavailable("Copilot is not configured: set ANTHROPIC_API_KEY for the backend.") from e
-        except anthropic.PermissionDeniedError as e:
-            raise CopilotUnavailable("The configured API key can't use this model.") from e
-        except anthropic.RateLimitError as e:
-            raise CopilotUnavailable("Copilot is rate limited, try again in a moment.") from e
-        except anthropic.BadRequestError as e:
-            logger.error("Copilot request rejected: %s", e.message)
-            raise CopilotUnavailable(f"Copilot request rejected: {e.message}") from e
-        except anthropic.APIStatusError as e:
-            raise CopilotUnavailable(f"Claude API error ({e.status_code}), try again.") from e
-        except anthropic.APIConnectionError as e:
-            raise CopilotUnavailable("Can't reach the Claude API (no internet?).") from e
-        except TypeError as e:
-            # With no credentials at all the SDK fails before sending anything.
-            if "authentication" not in str(e):
-                raise
-            raise CopilotUnavailable("Copilot is not configured: set ANTHROPIC_API_KEY for the backend.") from e
+        except errors.ClientError as e:
+            msg = e.message or ""
+            if "API key" in msg:
+                raise CopilotUnavailable(NOT_CONFIGURED) from e
+            if e.code in (401, 403):
+                raise CopilotUnavailable("The configured API key can't use this model.") from e
+            if e.code == 429:
+                raise CopilotUnavailable("Copilot is rate limited, try again in a moment.") from e
+            if e.code == 404:
+                raise CopilotUnavailable(f"Gemini model '{settings.COPILOT_MODEL}' not found: check COPILOT_MODEL.") from e
+            logger.error("Copilot request rejected: %s", msg)
+            raise CopilotUnavailable(f"Copilot request rejected: {msg}") from e
+        except errors.APIError as e:
+            raise CopilotUnavailable(f"Gemini API error ({e.code}), try again.") from e
+        except httpx.TransportError as e:
+            raise CopilotUnavailable("Can't reach the Gemini API (no internet?).") from e
 
-        if response.stop_reason == "refusal":
+        model = response.model_version or settings.COPILOT_MODEL
+        candidate = response.candidates[0] if response.candidates else None
+        blocked = (response.prompt_feedback is not None and response.prompt_feedback.block_reason) or (
+            candidate is not None and candidate.finish_reason in BLOCKED
+        )
+        if blocked:
             return {
                 "answer": "The copilot declined to answer this question.",
                 "cited_ids": [],
                 "refused": True,
-                "model": response.model,
+                "model": model,
             }
 
-        answer = "".join(b.text for b in response.content if b.type == "text").strip()
+        answer = (response.text or "").strip()
         known_ids = {int(e["id"]) for e in events}
         cited = sorted({int(m) for m in CITATION_RE.findall(answer)} & known_ids)
-        return {"answer": answer, "cited_ids": cited, "refused": False, "model": response.model}
+        return {"answer": answer, "cited_ids": cited, "refused": False, "model": model}
 
 
 copilot_service = CopilotService()

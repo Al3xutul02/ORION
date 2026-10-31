@@ -79,11 +79,11 @@ class Settings(BaseSettings):
     MAVLINK_IN_HOST: str = "0.0.0.0"
     MAVLINK_IN_PORT: int = 14560
 
-    # Read-only AAR copilot (Claude API). Without a key here, the SDK falls back to the
-    # ANTHROPIC_API_KEY environment variable or an `ant auth login` profile.
-    ANTHROPIC_API_KEY: Optional[str] = None
-    COPILOT_MODEL: str = "claude-opus-5-5"
-    COPILOT_EFFORT: str = "low"  # low | medium | high; low keeps chat answers quick
+    # Read-only AAR copilot (Gemini API). Without a key here, the SDK falls back to the
+    # GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
+    GEMINI_API_KEY: Optional[str] = None
+    COPILOT_MODEL: str = "gemini-3.8-flash"
+    COPILOT_EFFORT: str = "low"  # thinking level: low | medium | high; low keeps chat answers quick
 
 
 settings = Settings()

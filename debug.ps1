@@ -91,16 +91,16 @@ if ($ExposeDb) { $runArgs += @('-p', "127.0.0.1:${DbPort}:3306") }
 # external vehicles (SITL, QGC forwarding) come in on UDP 14560.
 $runArgs += @('-p', '14560:14560/udp', '-e', 'MAVLINK_OUT_HOST=host.docker.internal')
 
-# Forward ANTHROPIC_API_KEY if present in host env or Backend/.env so the AAR Copilot works inside the container.
-$apiKey = $env:ANTHROPIC_API_KEY
+# Forward GEMINI_API_KEY if present in host env or Backend/.env so the AAR Copilot works inside the container.
+$apiKey = $env:GEMINI_API_KEY
 if (-not $apiKey -and (Test-Path "$PSScriptRoot\Backend\.env")) {
-    $envLine = Get-Content "$PSScriptRoot\Backend\.env" | Where-Object { $_ -match '^\s*ANTHROPIC_API_KEY\s*=\s*(.+)$' } | Select-Object -First 1
-    if ($envLine -match '^\s*ANTHROPIC_API_KEY\s*=\s*(.+)$') {
+    $envLine = Get-Content "$PSScriptRoot\Backend\.env" | Where-Object { $_ -match '^\s*GEMINI_API_KEY\s*=\s*(.+)$' } | Select-Object -First 1
+    if ($envLine -match '^\s*GEMINI_API_KEY\s*=\s*(.+)$') {
         $apiKey = $Matches[1].Trim().Trim('"').Trim("'")
     }
 }
 if ($apiKey) {
-    $runArgs += @('-e', "ANTHROPIC_API_KEY=$apiKey")
+    $runArgs += @('-e', "GEMINI_API_KEY=$apiKey")
 }
 
 $runArgs += $Image
