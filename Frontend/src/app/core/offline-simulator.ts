@@ -391,16 +391,19 @@ export class OfflineSimulator {
 
     d.safeAirspaceTime += dt;
     if (d.safeAirspaceTime >= 4.0) {
-      if (d.spoofedAt !== null) {
-        // Commit current reported position as true position so the drone doesn't jump on recalibration
-        d.lat = repLat;
-        d.lon = repLon;
-        d.spoofedAt = null;
-      }
+      const wasSpoofed = d.spoofedAt !== null;
+      d.spoofedAt = null;
       d.jammedAt = null;
       d.safeAirspaceTime = 0;
+      if (wasSpoofed && d.egressPath.length > 0 && (d.mode === 'LOITER' || d.mode === 'EGRESS')) {
+        // Recompute egress route from the restored true physical position
+        const state = this.states().find(s => s.drone_id === d.id)!;
+        const paths = egressPaths(state, this.zones);
+        d.egressPath = d.route === 'RTL' ? paths.direct : paths.viaCorridor;
+        d.egressLeg = 0;
+      }
       this.log('GPS_RESTORED', d.id, {
-        description: `Drone ${d.id} recalibrated onboard EKF/IMU in safe airspace (${d.mode}) and restored clean 3D GPS lock`,
+        description: `Drone ${d.id} recalibrated onboard EKF/IMU in safe airspace (${d.mode}) and restored true 3D GPS position`,
       });
     }
   }
@@ -491,9 +494,19 @@ export class OfflineSimulator {
   private move(d: SimDrone, dt: number): void {
     if (d.mode === 'PATROL') {
       const { center, orbit } = d.sector;
-      d.angle += ANGULAR_SPEED * dt;
-      d.lat = center.lat + orbit.lat * Math.sin(d.angle);
-      d.lon = center.lon + orbit.lon * Math.cos(d.angle);
+      const targetLat = center.lat + orbit.lat * Math.sin(d.angle);
+      const targetLon = center.lon + orbit.lon * Math.cos(d.angle);
+      const dist = distanceM(d.lat, d.lon, targetLat, targetLon);
+      const budget = EGRESS_SPEED_MS * dt;
+      if (dt > 0 && dist > budget * 1.5) {
+        const f = budget / dist;
+        d.lat += (targetLat - d.lat) * f;
+        d.lon += (targetLon - d.lon) * f;
+      } else {
+        d.angle += ANGULAR_SPEED * dt;
+        d.lat = center.lat + orbit.lat * Math.sin(d.angle);
+        d.lon = center.lon + orbit.lon * Math.cos(d.angle);
+      }
       return;
     }
     if (d.mode === 'LOITER') {

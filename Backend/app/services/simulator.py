@@ -188,6 +188,10 @@ class OrionFleetSimulator:
             else:
                 d["mode"] = "CORRIDOR"
         elif action == "CONTINUE_PATROL":
+            if d["spoofed"]:
+                off_lat, off_lon = d.get("spoof_offset", (0.0, 0.0))
+                d["lat"] -= off_lat
+                d["lon"] -= off_lon
             d["offset_angle"] = math.atan2(
                 (d["lat"] - self.sector_center["lat"]) / 0.003,
                 (d["lon"] - self.sector_center["lon"]) / 0.004
@@ -211,6 +215,10 @@ class OrionFleetSimulator:
             target_drone_id = random.choice(candidates) if candidates else 2
 
         d = self.drones[target_drone_id]
+        if d["spoofed"]:
+            old_lat, old_lon = d.get("spoof_offset", (0.0, 0.0))
+            d["lat"] -= old_lat
+            d["lon"] -= old_lon
         d["spoofed"] = True
         off_lat = random.choice([-1, 1]) * random.uniform(0.0038, 0.0052)
         off_lon = random.choice([-1, 1]) * random.uniform(0.0035, 0.0050)
@@ -470,22 +478,39 @@ class OrionFleetSimulator:
 
         # Default: PATROL mode
         angular_speed = 0.08
-        d_data["offset_angle"] += angular_speed * dt
         patrol_radius_lat = 0.003
         patrol_radius_lon = 0.004
 
-        nominal_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
-        nominal_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
+        target_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
+        target_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
 
         if d_data["spoofed"]:
             off_lat, off_lon = d_data.get("spoof_offset", (0.0042, 0.0038))
-            d_data["lat"] = nominal_lat + off_lat
-            d_data["lon"] = nominal_lon + off_lon
-        else:
-            d_data["lat"] = nominal_lat
-            d_data["lon"] = nominal_lon
+            target_lat += off_lat
+            target_lon += off_lon
 
-        d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
+        dlat = target_lat - d_data["lat"]
+        dlon = target_lon - d_data["lon"]
+        dist_deg = math.hypot(dlat, dlon)
+        step = EGRESS_SPEED_DEG_PER_SEC * dt
+
+        if dist_deg > step * 1.5:
+            # Smoothly fly back to the patrol orbit entry point instead of teleporting
+            d_data["lat"] += (dlat / dist_deg) * step
+            d_data["lon"] += (dlon / dist_deg) * step
+            d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
+        else:
+            d_data["offset_angle"] += angular_speed * dt
+            nominal_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
+            nominal_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
+            if d_data["spoofed"]:
+                off_lat, off_lon = d_data.get("spoof_offset", (0.0042, 0.0038))
+                d_data["lat"] = nominal_lat + off_lat
+                d_data["lon"] = nominal_lon + off_lon
+            else:
+                d_data["lat"] = nominal_lat
+                d_data["lon"] = nominal_lon
+            d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
 
     def _update_drone_recalibration(self, db, d_id: int, d_data: Dict[str, Any], dt: float):
         """
@@ -522,6 +547,19 @@ class OrionFleetSimulator:
         d_data["safe_airspace_time"] = d_data.get("safe_airspace_time", 0.0) + dt
 
         if d_data["safe_airspace_time"] >= recal_threshold:
+            was_spoofed = d_data["spoofed"]
+            if was_spoofed:
+                # Reject false GPS offset and restore true physical coordinates from INS/EKF
+                off_lat, off_lon = d_data.get("spoof_offset", (0.0, 0.0))
+                d_data["lat"] -= off_lat
+                d_data["lon"] -= off_lon
+                if d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
+                    best_corr, _ = theatre_rules.find_best_corridor(d_data["lat"], d_data["lon"])
+                    corridors = theatre_rules.active_corridors()
+                    chosen = best_corr or (corridors[0] if corridors else None)
+                    if chosen:
+                        d_data["egress_waypoints"] = list(reversed(chosen["waypoints"]))
+
             d_data["spoofed"] = False
             d_data["jammed"] = False
             d_data["spoof_offset"] = (0.0, 0.0)
