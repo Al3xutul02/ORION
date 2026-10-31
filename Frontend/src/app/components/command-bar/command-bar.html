@@ -23,7 +23,7 @@
     <span class="dot"></span>
     @switch (store.mode() === 'offline' ? 'local' : store.link()) {
       @case ('online') { Backend online }
-      @case ('connecting') { Connecting… }
+      @case ('connecting') { Connecting... }
       @case ('offline') { Backend offline }
       @default { Demo mode }
     }
@@ -46,12 +46,12 @@
     @if (store.mode() === 'offline') {
       <div class="speed" role="group" aria-label="Playback speed">
         @for (s of speeds; track s) {
-          <button type="button" [class.on]="store.speed() === s" (click)="store.setSpeed(s)">{{ s }}×</button>
+          <button type="button" [class.on]="store.speed() === s" (click)="store.setSpeed(s)">{{ s }}&times;</button>
         }
       </div>
     }
     <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
-      {{ store.muted() ? '🔇' : '🔊' }}
+      {{ store.muted() ? '&#128263;' : '&#128266;' }}
     </button>
   </div>
 </header>
@@ -77,29 +77,79 @@
       <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
-      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">− Weather</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
+      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+        <span class="interval-label">Event interval:</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMin()"
+          (change)="onIntervalMinChange($event)"
+          title="Minimum seconds between random events"
+          aria-label="Minimum seconds"
+        />
+        <span class="interval-sep">&ndash;</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMax()"
+          (change)="onIntervalMaxChange($event)"
+          title="Maximum seconds between random events"
+          aria-label="Maximum seconds"
+        />
+        <span class="interval-unit">s</span>
+      </div>
     </div>
   } @else {
     <div class="live-banner">
       <span class="pulse-dot" [class.active]="store.running()"></span>
       <span class="live-title">Live EW Simulation</span>
-      <span class="live-sub">{{ liveTheatreSummary() }} · Random battlefield events occur automatically while running</span>
+      <span class="live-sub">{{ liveTheatreSummary() }} &middot; Random battlefield events occur automatically while running</span>
     </div>
     <div class="inject">
       <span class="hint">Battlefield events:</span>
-      <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">🎲 Random event</button>
+      <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">&#127922; Random event</button>
+      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+        <span class="interval-label">Interval:</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMin()"
+          (change)="onIntervalMinChange($event)"
+          title="Minimum seconds between random events"
+          aria-label="Minimum seconds"
+        />
+        <span class="interval-sep">&ndash;</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMax()"
+          (change)="onIntervalMaxChange($event)"
+          title="Maximum seconds between random events"
+          aria-label="Maximum seconds"
+        />
+        <span class="interval-unit">s</span>
+      </div>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
-      <button class="btn sm" type="button" (click)="store.trigger('corridor-appear')" [disabled]="store.busy()" title="Establish a new safe evacuation corridor">+ Safe corridor</button>
-      <button class="btn sm" type="button" (click)="store.trigger('corridor-disappear')" [disabled]="store.busy()" title="Compromise an existing safe corridor">− Safe corridor</button>
-      <button class="btn sm" type="button" (click)="store.trigger('danger-appear')" [disabled]="store.busy()" title="Spawn a new enemy danger zone in the theatre">+ Danger zone</button>
-      <button class="btn sm" type="button" (click)="store.trigger('danger-disappear')" [disabled]="store.busy()" title="Neutralize/clear an active danger zone">− Danger zone</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
       <span class="hint">Weather:</span>
       <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
-      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">− Weather</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
     </div>
   }
 </div>

@@ -82,6 +82,16 @@ INITIAL_ZONES: List[Dict[str, Any]] = [
         "radius_m": 450.0,
         "is_active": True,
         "detected_by": "PRECONFIGURED"
+    },
+    {
+        "id": 100,
+        "name": "Patrol Zone Alpha",
+        "zone_type": "PATROL",
+        "geometry_type": "CIRCLE",
+        "center": [44.3350, 23.8300],
+        "radius_m": 350.0,
+        "is_active": True,
+        "detected_by": "PRECONFIGURED"
     }
 ]
 
@@ -312,7 +322,7 @@ class TheatreRulesEngine:
             for z in self.zones:
                 if z["name"] == chosen["name"] and not z.get("is_active", True):
                     z["is_active"] = True
-                    z["detected_by"] = "ORION_THEATRE_INTEL"
+                    z["detected_by"] = "THEATRE_INTEL"
                     return z
             new_zone = {
                 "id": self._alloc_id(),
@@ -321,7 +331,7 @@ class TheatreRulesEngine:
                 "geometry_type": "POLYGON",
                 "waypoints": copy.deepcopy(chosen["waypoints"]),
                 "is_active": True,
-                "detected_by": "ORION_THEATRE_INTEL"
+                "detected_by": "THEATRE_INTEL"
             }
             self.zones.append(new_zone)
             return new_zone
@@ -341,7 +351,7 @@ class TheatreRulesEngine:
                 [round(44.3390 + jitter_lat, 4), round(23.8230 + jitter_lon, 4)],
             ],
             "is_active": True,
-            "detected_by": "ORION_THEATRE_INTEL"
+            "detected_by": "THEATRE_INTEL"
         }
         self.zones.append(new_zone)
         return new_zone
@@ -518,6 +528,250 @@ class TheatreRulesEngine:
 
         return None, last_block_reason or "All safe corridors blocked by hazard zones"
 
+
+    def get_zone(self, zone_id: int) -> Optional[Dict[str, Any]]:
+        """Returns the active zone with the specified id, or None."""
+        for z in self.zones:
+            if z.get("id") == zone_id and z.get("is_active", True):
+                return z
+        return None
+
+    def active_patrol_zones(self) -> List[Dict[str, Any]]:
+        """Returns all currently active PATROL zones."""
+        return [z for z in self.zones if z.get("is_active", True) and z.get("zone_type") == "PATROL"]
+
+    def add_patrol_zone(
+        self,
+        name: Optional[str],
+        center_lat: float,
+        center_lon: float,
+        radius_m: float
+    ) -> Dict[str, Any]:
+        """Creates a new PATROL zone defined by the operator."""
+        if not name or not name.strip():
+            count = len(self.active_patrol_zones())
+            greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+            label = greek[count] if count < len(greek) else f"Sector-{count + 1}"
+            name = f"Patrol Zone {label}"
+        zone = {
+            "id": self._alloc_id(),
+            "name": name.strip(),
+            "zone_type": "PATROL",
+            "geometry_type": "CIRCLE",
+            "center": [round(center_lat, 5), round(center_lon, 5)],
+            "radius_m": round(max(50.0, min(1500.0, radius_m)), 1),
+            "is_active": True,
+            "detected_by": "OPERATOR"
+        }
+        self.zones.append(zone)
+        return zone
+
+    def add_threat_zone(
+        self,
+        name: Optional[str],
+        center_lat: float,
+        center_lon: float,
+        radius_m: float
+    ) -> Dict[str, Any]:
+        """Creates a new operator-marked THREAT zone on the map."""
+        if not name or not name.strip():
+            count = len([z for z in self.zones if z.get("zone_type") == "THREAT" and z.get("is_active", True)])
+            greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+            label = greek[count] if count < len(greek) else f"Sector-{count + 1}"
+            name = f"Restricted Threat Zone {label}"
+        zone = {
+            "id": self._alloc_id(),
+            "name": name.strip(),
+            "zone_type": "THREAT",
+            "geometry_type": "CIRCLE",
+            "center": [round(center_lat, 5), round(center_lon, 5)],
+            "radius_m": round(max(50.0, min(1500.0, radius_m)), 1),
+            "is_active": True,
+            "detected_by": "OPERATOR"
+        }
+        self.zones.append(zone)
+        return zone
+
+    def add_safe_corridor(
+        self,
+        name: Optional[str],
+        waypoints: List[List[float]]
+    ) -> Dict[str, Any]:
+        """Creates a new operator-defined SAFE_CORRIDOR on the map."""
+        if not name or not name.strip():
+            count = len(self.active_corridors())
+            greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+            label = greek[count] if count < len(greek) else f"Route-{count + 1}"
+            name = f"Safe Corridor {label}"
+        zone = {
+            "id": self._alloc_id(),
+            "name": name.strip(),
+            "zone_type": "SAFE_CORRIDOR",
+            "geometry_type": "POLYGON",
+            "waypoints": [[round(pt[0], 5), round(pt[1], 5)] for pt in waypoints],
+            "is_active": True,
+            "detected_by": "OPERATOR"
+        }
+        self.zones.append(zone)
+        return zone
+
+    def apply_patrol_tactic(self, zone_id: int, tactic: str) -> Dict[str, Any]:
+        """
+        Applies a tactical swarm maneuver to a patrol zone:
+        - SECTOR_ORBIT_SHIFT: Displaces orbit away from active EW jammer boundary to clear airspace.
+        - TIGHT_MESH: Contracts orbit radius by 40% for anti-spoofing P2P cross-ranging.
+        - WIDE_RECON: Expands orbit radius by 40% for maximum perimeter surveillance sweep.
+        - RESYNC_EQUIDISTANT: Rebalances drone phases symmetrically.
+        - EGRESS_CORRIDOR: Directs all swarm members in zone to egress along the nearest safe corridor.
+        """
+        pz = self.get_zone(zone_id)
+        if not pz or pz.get("zone_type") != "PATROL":
+            return {"status": "ERROR", "message": "Patrol zone not found"}
+
+        tactic_upper = tactic.upper()
+        if tactic_upper == "SECTOR_ORBIT_SHIFT":
+            jammers = [
+                z for z in self.active_danger_zones()
+                if z.get("zone_type") == "INTERFERENCE" and z.get("geometry_type") == "CIRCLE"
+            ]
+            overlapping = []
+            for j in jammers:
+                d_m = haversine_distance_m(pz["center"][0], pz["center"][1], j["center"][0], j["center"][1])
+                if d_m < (pz["radius_m"] + j["radius_m"]):
+                    overlapping.append((d_m, j))
+
+            if overlapping:
+                overlapping.sort(key=lambda x: x[0])
+                d_m, j = overlapping[0]
+                v_lat = pz["center"][0] - j["center"][0]
+                v_lon = pz["center"][1] - j["center"][1]
+                mag = math.hypot(v_lat, v_lon)
+                if mag < 1e-6:
+                    v_lat, v_lon, mag = 0.002, 0.002, math.hypot(0.002, 0.002)
+                needed_shift_m = (pz["radius_m"] + j["radius_m"]) - d_m + 70.0
+                needed_shift_m = min(400.0, max(140.0, needed_shift_m))
+                shift_lat = (needed_shift_m / 111139.0) * (v_lat / mag)
+                shift_lon = (needed_shift_m / (111139.0 * math.cos(math.radians(pz["center"][0])))) * (v_lon / mag)
+                new_lat = max(44.3120, min(44.3480, pz["center"][0] + shift_lat))
+                new_lon = max(23.7940, min(23.8520, pz["center"][1] + shift_lon))
+                pz["center"] = [round(new_lat, 5), round(new_lon, 5)]
+                pz["shifted"] = True
+                pz["tactic"] = "SECTOR_ORBIT_SHIFT"
+                return {
+                    "status": "APPLIED",
+                    "tactic": "SECTOR_ORBIT_SHIFT",
+                    "zone_id": zone_id,
+                    "zone_name": pz["name"],
+                    "new_center": pz["center"],
+                    "message": f"Orbit shifted to ({new_lat:.4f}, {new_lon:.4f}) outside EW jammer boundary."
+                }
+            else:
+                pz["center"] = [round(pz["center"][0] + 0.0015, 5), round(pz["center"][1] + 0.0015, 5)]
+                pz["shifted"] = True
+                pz["tactic"] = "SECTOR_ORBIT_SHIFT"
+                return {
+                    "status": "APPLIED",
+                    "tactic": "SECTOR_ORBIT_SHIFT",
+                    "zone_id": zone_id,
+                    "zone_name": pz["name"],
+                    "new_center": pz["center"],
+                    "message": "Defensive sector orbit offset applied."
+                }
+
+        elif tactic_upper == "TIGHT_MESH":
+            base_r = pz.get("base_radius_m", pz["radius_m"])
+            pz["base_radius_m"] = base_r
+            pz["radius_m"] = round(max(100.0, base_r * 0.6), 1)
+            pz["tactic"] = "TIGHT_MESH"
+            return {
+                "status": "APPLIED",
+                "tactic": "TIGHT_MESH",
+                "zone_id": zone_id,
+                "radius_m": pz["radius_m"],
+                "message": f"Swarm contracted to tight mesh orbit ({pz['radius_m']}m) for anti-spoofing defense."
+            }
+
+        elif tactic_upper == "WIDE_RECON":
+            base_r = pz.get("base_radius_m", pz["radius_m"])
+            pz["base_radius_m"] = base_r
+            pz["radius_m"] = round(min(800.0, base_r * 1.45), 1)
+            pz["tactic"] = "WIDE_RECON"
+            return {
+                "status": "APPLIED",
+                "tactic": "WIDE_RECON",
+                "zone_id": zone_id,
+                "radius_m": pz["radius_m"],
+                "message": f"Swarm expanded to wide perimeter recon orbit ({pz['radius_m']}m)."
+            }
+
+        elif tactic_upper == "RESYNC_EQUIDISTANT":
+            pz["tactic"] = "RESYNC_EQUIDISTANT"
+            return {
+                "status": "APPLIED",
+                "tactic": "RESYNC_EQUIDISTANT",
+                "zone_id": zone_id,
+                "message": "Swarm phase resynchronization requested."
+            }
+
+        elif tactic_upper == "EGRESS_CORRIDOR":
+            pz["tactic"] = "EGRESS_CORRIDOR"
+            return {
+                "status": "APPLIED",
+                "tactic": "EGRESS_CORRIDOR",
+                "zone_id": zone_id,
+                "message": "Swarm emergency egress ordered via safe corridor."
+            }
+
+        return {"status": "UNKNOWN_TACTIC", "message": f"Tactic {tactic} not recognized"}
+
+    def delete_zone(self, zone_id: int) -> bool:
+        """Deactivates a tactical zone by id (e.g. operator-deleted patrol zone)."""
+        for z in self.zones:
+            if z.get("id") == zone_id:
+                z["is_active"] = False
+                return True
+        return False
+
+    def plan_target_route(
+        self,
+        start: Tuple[float, float],
+        target: Tuple[float, float],
+        path_type: str = "SAFE"
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Plans an optimal A* route to a target location (patrol zone entry or loiter point).
+        - SAFE: Zero hazards. Avoids all THREAT, INTERFERENCE, and severe WEATHER zones.
+                If start is inside a hazard, exits it immediately.
+        - RISKY: Traverses INTERFERENCE and WEATHER zones (treated as soft obstacles),
+                 while strictly avoiding all THREAT zones.
+        """
+        if path_type.upper() == "RISKY":
+            # Strictly avoid THREAT zones (hard obstacles).
+            # Allow crossing INTERFERENCE and WEATHER zones (soft obstacles, traversable).
+            hazards = [
+                (z["center"][0], z["center"][1], z["radius_m"], z["name"], False)
+                for z in self.active_danger_zones()
+                if z.get("geometry_type") == "CIRCLE" and z.get("zone_type") == "THREAT"
+            ] + [
+                (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
+                for z in self.zones
+                if z.get("is_active", True)
+                and z.get("geometry_type") == "CIRCLE"
+                and z.get("zone_type") in ("INTERFERENCE", "WEATHER")
+            ]
+        else:
+            # SAFE: Avoid all danger zones and severe weather
+            hazards = [
+                (z["center"][0], z["center"][1], z["radius_m"], z["name"], False)
+                for z in self.blocking_zones()
+                if z.get("geometry_type") == "CIRCLE"
+            ] + [
+                (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
+                for z in self.active_weather_zones()
+                if not weather.is_severe(z)
+            ]
+        return plan_route(start, target, hazards)
+
     def plan_safe_route(self, drone_lat: float, drone_lon: float) -> Optional[Dict[str, Any]]:
         """A* route from the drone to Home Base around every active hazard zone (see pathfinder.py)."""
         # Hard obstacles: EW, threats and weather beyond limits. Lighter weather is only avoided when cheap.
@@ -564,8 +818,8 @@ class TheatreRulesEngine:
                         "blocked_reason": "Sensors and navigation nominal",
                         "recommended_action": "CONTINUE_PATROL",
                         "reason": (
-                            "Sensors recalibrated and clean GPS fix verified. "
-                            "Airspace is clear of known hazards; safe to resume regular sector patrol."
+                            "Sensors recalibrated and verified in clean airspace. "
+                            "Action needed: Drone is holding idle in loiter; operator command is required to resume active sector patrol."
                         ),
                         "recommendation_details": (
                             "Sensors recalibrated and clean GPS fix verified. "
@@ -589,8 +843,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct Return-to-Home route blocked: {block_reason}",
                     "recommended_action": "LOITER_THEN_SAFE_CORRIDOR_RETREAT",
                     "reason": (
-                        f"Direct flight path to Base is blocked by {block_reason}. "
-                        f"Holding to stabilize before retreating via verified Safe Corridor {c_name} prevents hostile intercept."
+                        f"Hostile electronic warfare hazard active: Direct path to Base is compromised by {block_reason}. "
+                        f"Action needed: Direct RTL will cause complete C2 link loss; drone must immediately loiter and divert through Safe Corridor {c_name}."
                     ),
                     "recommendation_details": (
                         f"1. Command immediate LOITER to stabilize. "
@@ -615,8 +869,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
                     "recommended_action": "SAFE_ROUTE_RETREAT",
                     "reason": (
-                        f"Direct RTL blocked ({block_reason}) and corridors unavailable. "
-                        "Computed A* route safely bypasses all active EW and weather hazards to Base."
+                        f"Hostile interference active: Direct path to Base crosses active hazards ({block_reason}) and corridors are closed. "
+                        "Action needed: Direct RTL would fly into hostile threat coverage; drone must follow computed A* obstacle-avoidance route to Base."
                     ),
                     "recommendation_details": (
                         f"1. Fly the computed safe route to Base: {legs} legs, "
@@ -638,8 +892,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
                     "recommended_action": "LOITER",
                     "reason": (
-                        f"Direct RTL blocked ({block_reason}) and no safe retreat corridor exists. "
-                        "Holding position (LOITER) maintains altitude while awaiting an egress path."
+                        f"Hostile interference active: Direct RTL is blocked ({block_reason}) and no safe egress corridor is available. "
+                        "Action needed: Immediate LOITER is required to hold altitude and prevent wandering into surrounding hostile zones while awaiting corridor clearance."
                     ),
                     "recommendation_details": (
                         "1. Hold position (LOITER) at current altitude to stabilize. "
@@ -658,8 +912,9 @@ class TheatreRulesEngine:
                     "blocked_reason": "GPS ephemeris corrupted by spoofing attack; patrol trajectory compromised",
                     "recommended_action": "LOITER",
                     "reason": (
-                        "Sudden GPS ephemeris jump detected from spoofing attack. "
-                        "Holding position (LOITER) allows onboard EKF/IMU filters to stabilize and reject false fix before resuming patrol."
+                        "Adversary GPS spoofing detected (sudden ephemeris jump). "
+                        "Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger. "
+                        "Immediate LOITER is required to hold position while onboard EKF/IMU filters isolate and reject false satellite signals."
                     ),
                     "recommendation_details": (
                         "1. Command immediate LOITER to hold position and stabilize flight. "
@@ -670,13 +925,35 @@ class TheatreRulesEngine:
                         {"lat": drone_lat, "lon": drone_lon, "alt": 120.0, "action": "LOITER"}
                     ]
                 }
+            if "weather" in reason.lower() or "wind" in reason.lower():
+                return {
+                    "drone_id": drone_id,
+                    "trigger_event": "WEATHER_LIMIT_EXCEEDED",
+                    "blocked_action": "CONTINUE_PATROL",
+                    "blocked_reason": "Wind conditions exceed platform structural safety limits",
+                    "recommended_action": "RETURN_TO_HOME",
+                    "reason": (
+                        f"Severe weather warning: {reason}. "
+                        "Action needed: Extreme wind gusts exceed maximum airframe limits; immediate egress to Home Base is required to prevent aerodynamic loss of control."
+                    ),
+                    "recommendation_details": (
+                        "1. Abort sector patrol in hazardous weather. "
+                        "2. Return to Home Base directly along clear corridor."
+                    ),
+                    "safe_waypoints": [
+                        {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
+                    ]
+                }
             return {
                 "drone_id": drone_id,
                 "trigger_event": "TRUST_DEGRADED",
                 "blocked_action": "NONE",
                 "blocked_reason": "Direct corridor clear",
                 "recommended_action": "RETURN_TO_HOME",
-                "reason": "Sensor trust degraded but flight corridor to Home Base is clear of known EW hazards; standard RTL permitted.",
+                "reason": (
+                    "Sensor confidence has dropped below mission safety thresholds. "
+                    "Action needed: Return-to-base is required to protect the airframe; direct corridor to Home Base is verified clear of EW hazards."
+                ),
                 "recommendation_details": "Corridor to Home Base is clear of known EW interference. Standard RTL permitted.",
                 "safe_waypoints": [
                     {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}

@@ -296,3 +296,36 @@ export function egressPaths(drone: DroneState, zones: Zone[]) {
   const viaRoute: [number, number][] = planned ? planned.waypoints.map(([la, lo]) => [lo, la] as [number, number]) : [];
   return { direct, viaCorridor, viaRoute };
 }
+
+
+/**
+ * Plans an optimal A* route to a target destination (patrol zone entry or loiter point).
+ * - SAFE: Zero hazards. Avoids all THREAT, INTERFERENCE, and severe WEATHER zones.
+ * - RISKY: Traverses INTERFERENCE and WEATHER zones (soft obstacles), while strictly avoiding THREAT zones.
+ */
+export function planTargetRoute(
+  start: [number, number],
+  target: [number, number],
+  zones: Zone[],
+  pathType: 'SAFE' | 'RISKY' = 'SAFE',
+): PlannedRoute | null {
+  let hazards: { lat: number; lon: number; radiusM: number; name: string; soft?: boolean }[];
+  if (pathType === 'RISKY') {
+    hazards = [
+      ...zones
+        .filter(z => z.is_active && z.zone_type === 'THREAT' && z.center && z.radius_m)
+        .map(z => ({ lat: z.center![0], lon: z.center![1], radiusM: z.radius_m!, name: z.name, soft: false })),
+      ...zones
+        .filter(z => z.is_active && (z.zone_type === 'INTERFERENCE' || isWeather(z)) && z.center && z.radius_m)
+        .map(z => ({ lat: z.center![0], lon: z.center![1], radiusM: z.radius_m!, name: z.name, soft: true })),
+    ];
+  } else {
+    hazards = [
+      ...hazardZones(zones).map(z => ({ lat: z.center![0], lon: z.center![1], radiusM: z.radius_m!, name: z.name, soft: false })),
+      ...zones
+        .filter(z => z.is_active && isWeather(z) && !isSevereWeather(z) && z.center && z.radius_m)
+        .map(z => ({ lat: z.center![0], lon: z.center![1], radiusM: z.radius_m!, name: z.name, soft: true })),
+    ];
+  }
+  return planRoute(start, target, hazards);
+}

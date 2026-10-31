@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { ActionOption, evaluateActions } from '../../core/geo';
-import { Recommendation } from '../../core/models';
+import { ActionOption, distanceM, evaluateActions } from '../../core/geo';
+import { DroneState, Recommendation, Zone, ZoneTactic } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
+
+export type DecisionTab = 'commands' | 'suggestions';
 
 @Component({
   selector: 'app-decision-panel',
@@ -14,7 +16,10 @@ import { OrionStore } from '../../core/orion-store.service';
 export class DecisionPanel {
   protected store = inject(OrionStore);
 
-  /** Action awaiting the operator's second click. */
+  /** Active sub-tab: 'commands' (default) or 'suggestions'. */
+  protected activeTab = signal<DecisionTab>('commands');
+
+  /** Action awaiting the operator's second click in the Commands tab. */
   protected confirming = signal<ActionOption['id'] | null>(null);
 
   protected actions = computed(() => {
@@ -26,12 +31,85 @@ export class DecisionPanel {
 
   protected history = computed(() => this.store.recommendations().filter(r => r.status !== 'PENDING'));
 
+  protected pathType = signal<'SAFE' | 'RISKY'>('SAFE');
+  protected patrolZones = computed(() => this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL'));
+  protected selectedPatrolZoneId = signal<number | null>(null);
+  protected pickedLoiterPoint = computed(() => this.store.pickedLoiterPoint());
+  protected commandScope = signal<'drone' | 'zone'>('drone');
+  protected activeZoneId = signal<number | null>(null);
+  protected activeZone = computed(() => {
+    const pzs = this.patrolZones();
+    const id = this.activeZoneId() ?? pzs[0]?.id;
+    return pzs.find(z => z.id === id) ?? null;
+  });
+  protected executingTactic = signal<string | null>(null);
+
+  protected setCommandScope(scope: 'drone' | 'zone'): void {
+    this.commandScope.set(scope);
+    this.confirming.set(null);
+    this.executingTactic.set(null);
+  }
+
+  protected selectZone(id: number): void {
+    this.activeZoneId.set(id);
+    this.executingTactic.set(null);
+  }
+
+  protected zoneDrones(zoneId: number): DroneState[] {
+    return this.store.drones().filter(d => (d.patrol_zone_id ?? 10) === zoneId || (zoneId === 100 && (d.patrol_zone_id === 100 || d.patrol_zone_id === 10)));
+  }
+
+  protected isZoneJammed(zoneId: number): boolean {
+    const z = this.store.zones().find(zone => zone.id === zoneId);
+    if (!z || !z.center || !z.radius_m) return false;
+    const jammers = this.store.zones().filter(zone => zone.is_active && zone.zone_type === 'INTERFERENCE' && zone.center && zone.radius_m);
+    return jammers.some(j => distanceM(z.center![0], z.center![1], j.center![0], j.center![1]) < (z.radius_m! + j.radius_m!));
+  }
+
+  protected zoneName(id: number): string | null {
+    const z = this.store.zones().find(zone => zone.id === id);
+    return z?.name ?? null;
+  }
+
+  protected executeTactic(zoneId: number, tactic: string): void {
+    this.store.executeZoneTactic(zoneId, tactic);
+    this.executingTactic.set(null);
+  }
+
+  protected setPathType(type: 'SAFE' | 'RISKY'): void {
+    this.pathType.set(type);
+  }
+
+  protected setPatrolZone(id: number): void {
+    this.selectedPatrolZoneId.set(id);
+  }
+
+  protected joinPatrol(droneId: number): void {
+    const zid = this.selectedPatrolZoneId() ?? this.patrolZones()[0]?.id;
+    this.store.commandDrone(droneId, 'JOIN_PATROL', zid, undefined, this.pathType());
+  }
+
+  protected pickLoiter(): void {
+    this.store.setMapMode('pick_loiter');
+  }
+
+  protected sendLoiter(droneId: number): void {
+    const d = this.store.selectedDrone();
+    const pt = this.pickedLoiterPoint() ?? (d ? [d.latitude, d.longitude] : [44.335, 23.83]);
+    this.store.commandDrone(droneId, 'LOITER_AT', undefined, pt, this.pathType());
+    this.store.setPickedLoiterPoint(null);
+  }
+
   constructor() {
     // Switching drones cancels a half-finished confirmation.
     effect(() => {
       this.store.selectedDroneId();
       this.confirming.set(null);
     });
+  }
+
+  protected setTab(tab: DecisionTab): void {
+    this.activeTab.set(tab);
   }
 
   protected send(a: ActionOption): void {
@@ -51,28 +129,55 @@ export class DecisionPanel {
     return action.replaceAll('_', ' ').toLowerCase();
   }
 
+  protected eventLabel(event: string): string {
+    switch (event) {
+      case 'SENSORS_RECALIBRATED_SAFE':
+        return 'Recalibrated';
+      case 'SPOOFING_ATTACK_DETECTED':
+        return 'GPS Spoofed';
+      case 'TRUST_DEGRADED_EW_HAZARD':
+        return 'EW Hazard';
+      case 'TRUST_DEGRADED_NO_CORRIDOR':
+        return 'Hazard Area';
+      case 'WEATHER_LIMIT_EXCEEDED':
+        return 'Severe Weather';
+      case 'PATROL_ZONE_JAMMED':
+        return 'EW Jammed';
+      default:
+        return event.replaceAll('_', ' ');
+    }
+  }
+
+  protected eventLevel(event: string): 'green' | 'yellow' | 'red' {
+    if (event.includes('SAFE')) return 'green';
+    if (event.includes('SPOOF') || event.includes('WEATHER')) return 'yellow';
+    return 'red';
+  }
+
   protected recReason(rec: Recommendation): string {
     if (rec.reason) return rec.reason;
-    if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE') {
-      return 'Sensors recalibrated and clean GPS fix verified; safe to resume regular sector patrol.';
+    if (rec.trigger_event === 'PATROL_ZONE_JAMMED' || rec.recommended_action === 'SECTOR_ORBIT_SHIFT') {
+      return 'Active electronic warfare jamming intersects the patrol zone, compromising drone GPS and C2 navigation. Action needed: Shift swarm orbit to unjammed sector to restore clean communications while maintaining continuous surveillance.';
     }
-    if (rec.recommended_action === 'CONTINUE_PATROL') {
-      return 'Sensors and navigation verified nominal in safe airspace; clear to resume patrol orbit.';
+    if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE' || rec.recommended_action === 'CONTINUE_PATROL') {
+      return 'Sensor recalibration complete and verified in clean airspace. Action needed: Drone is holding idle in loiter; operator command is required to resume regular sector patrol.';
+    }
+    if (rec.trigger_event === 'SPOOFING_ATTACK_DETECTED' || rec.recommended_action === 'LOITER') {
+      return 'Adversary GPS spoofing detected (sudden ephemeris jump). Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger; immediate LOITER is required to hold position and stabilize onboard EKF/IMU.';
     }
     if (rec.recommended_action.includes('CORRIDOR')) {
       return rec.blocked_reason
-        ? `Direct route compromised (${rec.blocked_reason}); verified corridor provides safe egress.`
-        : 'Safe corridor provides clear passage away from battlefield interference.';
+        ? `Hostile electronic warfare hazard active (${rec.blocked_reason}). Action needed: Direct flight path is compromised; drone must divert through Safe Corridor to prevent complete C2 link loss.`
+        : 'Hostile interference active in sector. Action needed: Drone must divert through verified Safe Corridor to maintain link.';
     }
     if (rec.recommended_action === 'SAFE_ROUTE_RETREAT') {
-      return 'Direct RTL path is blocked; computed A* route skirts active hazard boundaries safely.';
-    }
-    if (rec.recommended_action === 'LOITER') {
-      return 'Sudden GPS ephemeris jump detected; holding position allows onboard EKF/IMU to stabilize and reject false fix.';
+      return `Direct path to Base is blocked (${rec.blocked_reason || 'hazard zone'}). Action needed: Drone must navigate around threats via computed A* safe waypoints to reach Base.`;
     }
     if (rec.recommended_action === 'RETURN_TO_HOME') {
-      return 'Direct flight corridor to Home Base is verified clear of known EW hazards and severe weather.';
+      return 'Sensor confidence degraded or operating limits exceeded. Action needed: Return-to-base along clear corridor is required to protect the airframe.';
     }
-    return rec.blocked_reason || 'Tactical safety procedure recommended by ORION rules engine.';
+    return rec.blocked_reason
+      ? `Operating hazard detected: ${rec.blocked_reason}. Action needed: Tactical intervention required to safeguard the airframe.`
+      : 'Action needed: Tactical safety procedure required by ORION rules engine.';
   }
 }

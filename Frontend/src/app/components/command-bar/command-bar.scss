@@ -242,6 +242,63 @@
     font-size: 11px;
     color: var(--text-faint);
   }
+
+  .interval-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    vertical-align: middle;
+
+    .interval-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+
+    .interval-input {
+      width: 38px;
+      height: 22px;
+      padding: 0 3px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: var(--bg-elev);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11.5px;
+      font-weight: 700;
+      text-align: center;
+      box-sizing: border-box;
+
+      &:focus {
+        outline: 1px solid var(--accent);
+        border-color: var(--accent);
+      }
+
+      &::-webkit-inner-spin-button,
+      &::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      -moz-appearance: textfield;
+    }
+
+    .interval-sep {
+      font-size: 11px;
+      color: var(--text-faint);
+    }
+
+    .interval-unit {
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--text-dim);
+    }
+  }
 }
 
 @media (max-width: 1100px) {

@@ -42,4 +42,24 @@ export class CommandBar {
     const hazards = zs.filter(z => z.zone_type === 'THREAT' || z.zone_type === 'INTERFERENCE').length;
     return `${corridors} safe corridor${corridors === 1 ? '' : 's'} · ${hazards} danger/EW zone${hazards === 1 ? '' : 's'}`;
   });
+
+  protected onIntervalMinChange(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const val = parseFloat(input.value);
+    if (!isNaN(val) && val > 0) {
+      this.store.setRandomInterval(val, Math.max(val, this.store.randomIntervalMax()));
+    } else {
+      input.value = String(this.store.randomIntervalMin());
+    }
+  }
+
+  protected onIntervalMaxChange(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const val = parseFloat(input.value);
+    if (!isNaN(val) && val > 0) {
+      this.store.setRandomInterval(Math.min(this.store.randomIntervalMin(), val), val);
+    } else {
+      input.value = String(this.store.randomIntervalMax());
+    }
+  }
 }

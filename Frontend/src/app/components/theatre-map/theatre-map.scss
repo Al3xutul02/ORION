@@ -5,12 +5,21 @@
   min-height: 0;
   border-radius: var(--radius);
   overflow: hidden;
+  contain: layout paint;
   border: 1px solid var(--line);
 }
 
 .map {
   position: absolute;
   inset: 0;
+
+  &.mode-crosshair {
+    cursor: crosshair !important;
+  }
+
+  &.mode-delete {
+    cursor: pointer !important;
+  }
 }
 
 .legend {
@@ -20,21 +29,23 @@
   z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  max-width: calc(100% - 140px);
-  padding: 6px 10px;
+  gap: 3px 10px;
+  max-width: calc(100% - 160px);
+  padding: 4px 8px;
   border-radius: var(--radius-sm);
-  background: rgba(11, 15, 20, 0.88);
+  background: rgba(11, 15, 20, 0.92);
   backdrop-filter: blur(6px);
   border: 1px solid var(--line);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-dim);
   pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 
   span {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
+    white-space: nowrap;
   }
 }
 
@@ -45,6 +56,7 @@
   border: 1px dashed;
 
   &.base { border-color: var(--zone-base); background: rgba(92, 200, 255, 0.2); }
+  &.patrol { border-color: #00d4ff; background: transparent; }
   &.corridor { border-color: var(--zone-corridor); background: rgba(61, 220, 132, 0.25); }
   &.interference { border-color: var(--zone-interference); background: rgba(255, 159, 67, 0.2); }
   &.threat { border-color: var(--zone-threat); background: rgba(255, 84, 99, 0.2); }
@@ -111,6 +123,31 @@
 
 // Markers are created imperatively, so these rules must pierce view encapsulation.
 :host ::ng-deep {
+  .maplibregl-ctrl-bottom-right {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: center;
+    gap: 6px;
+    margin-right: 8px;
+    margin-bottom: 8px;
+    z-index: 4;
+  }
+
+  .maplibregl-ctrl-scale {
+    background-color: rgba(11, 18, 26, 0.9);
+    border-color: var(--line-strong);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 1px 4px;
+    margin: 0;
+  }
+
+  .maplibregl-ctrl-attrib {
+    background-color: rgba(11, 18, 26, 0.9);
+    margin: 0;
+  }
+
   .drone-marker {
     --status: var(--green);
     display: flex;
@@ -186,6 +223,31 @@
     &.zone-THREAT { color: var(--zone-threat); }
     &.zone-WEATHER { color: var(--violet); }
 
+    &.zone-PATROL {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 5px;
+      padding: 2.5px 8px;
+      border-radius: 12px;
+      background: rgba(11, 18, 26, 0.94);
+      backdrop-filter: blur(6px);
+      border: 1px solid rgba(0, 212, 255, 0.6);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.75);
+      color: #00e5ff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      pointer-events: none;
+
+      .patrol-icon {
+        font-size: 11px;
+        color: #00e5ff;
+      }
+    }
+
     &.zone-WEATHER em {
       color: var(--violet);
     }
@@ -196,4 +258,148 @@
   50% {
     box-shadow: 0 0 0 9px color-mix(in srgb, var(--red) 10%, transparent);
   }
+}
+
+
+.zone-tools {
+  display: inline-flex;
+  gap: 6px;
+
+  .tool-btn {
+    font-size: 11px;
+    padding: 3px 9px;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    color: #00d4ff;
+    background: rgba(14, 21, 29, 0.88);
+    backdrop-filter: blur(4px);
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: rgba(0, 212, 255, 0.15);
+      border-color: #00d4ff;
+    }
+
+    &.active {
+      background: #00d4ff;
+      color: #0b0f14;
+      font-weight: 600;
+      box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);
+    }
+
+    &.danger {
+      border-color: rgba(255, 84, 99, 0.5);
+      color: var(--red);
+
+      &:hover {
+        background: rgba(255, 84, 99, 0.15);
+        border-color: var(--red);
+      }
+
+      &.active {
+        background: var(--red);
+        color: #fff;
+        font-weight: 600;
+        box-shadow: 0 0 10px rgba(255, 84, 99, 0.4);
+      }
+    }
+  }
+}
+
+.mode-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: rgba(11, 15, 20, 0.94);
+  border: 1px solid #00d4ff;
+  border-radius: var(--radius-sm);
+  color: var(--text-bright);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+
+  .mode-icon {
+    color: #00d4ff;
+    font-size: 14px;
+    font-weight: bold;
+  }
+
+  .mode-text {
+    font-weight: 500;
+  }
+
+  .btn-finish-corridor {
+    border: 1px solid var(--green);
+    background: rgba(61, 220, 132, 0.25);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover:not(:disabled) {
+      background: var(--green);
+      color: #0b0f14;
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+  }
+
+  .btn-cancel-mode {
+    border: 1px solid var(--line-strong);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: rgba(255, 84, 99, 0.2);
+      border-color: var(--red);
+      color: var(--red);
+    }
+  }
+}
+
+.loiter-target-marker {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+
+  .reticle {
+    font-size: 20px;
+    line-height: 1;
+    filter: drop-shadow(0 0 4px #00d4ff);
+    animation: reticle-pulse 1.5s ease-in-out infinite;
+  }
+
+  .label {
+    font-size: 10px;
+    font-family: monospace;
+    font-weight: 600;
+    color: #00d4ff;
+    background: rgba(11, 15, 20, 0.85);
+    padding: 1px 4px;
+    border-radius: 2px;
+    border: 1px solid #00d4ff;
+    margin-top: 2px;
+  }
+}
+
+@keyframes reticle-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.15); opacity: 1; }
 }

@@ -3,7 +3,7 @@ import {
 } from '@angular/core';
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
-import { circleRing, egressPaths, evaluateActions, weatherPolygon } from '../../core/geo';
+import { circleRing, distanceM, egressPaths, evaluateActions, weatherPolygon } from '../../core/geo';
 import { DroneState, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 import { DroneDetails } from '../drone-details/drone-details';
@@ -15,6 +15,7 @@ const ZONE_COLORS: Record<string, string> = {
   INTERFERENCE: '#ff9f43',
   THREAT: '#ff5463',
   WEATHER: '#b48cff',
+  PATROL: '#00d4ff',
 };
 const STATUS_COLORS: Record<string, string> = { GREEN: '#3ddc84', YELLOW: '#f5c542', RED: '#ff5463' };
 
@@ -54,6 +55,10 @@ export class TheatreMap implements OnDestroy {
   private resizeObserver: ResizeObserver | null = null;
   private droneMarkers = new Map<number, Marker>();
   private zoneLabels = new Map<number, Marker>();
+  private loiterMarker: Marker | null = null;
+  private isDrawingZone = false;
+  private drawCenter: [number, number] | null = null;
+  protected corridorPoints: [number, number][] = [];
 
   constructor() {
     afterNextRender(() => this.init());
@@ -74,6 +79,11 @@ export class TheatreMap implements OnDestroy {
       const zones = this.store.zones();
       const selected = this.store.selectedDroneId();
       if (this.ready) this.renderDrones(drones, zones, selected);
+    });
+
+    effect(() => {
+      const pt = this.store.pickedLoiterPoint();
+      if (this.ready) this.renderLoiterTarget(pt);
     });
   }
 
@@ -139,6 +149,7 @@ export class TheatreMap implements OnDestroy {
     this.resizeObserver.observe(this.host().nativeElement);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+    this.setupInteractions(map);
 
     // Overlays are wiped by every setStyle, so they are (re)added on each style load.
     map.on('style.load', () => this.addOverlays());
@@ -156,7 +167,8 @@ export class TheatreMap implements OnDestroy {
 
     map.addSource('zones', { type: 'geojson', data: empty() });
     map.addLayer({
-      id: 'zones-fill', type: 'fill', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
+      id: 'zones-fill', type: 'fill', source: 'zones',
+      filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['!=', ['get', 'zone_type'], 'PATROL']],
       paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'is_core'], true], 0.32, ['==', ['get', 'dynamic'], true], 0.2, 0.12] },
     });
     map.addLayer({
@@ -212,6 +224,26 @@ export class TheatreMap implements OnDestroy {
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
     });
 
+    map.addSource('preview-zone', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'preview-zone-fill', type: 'fill', source: 'preview-zone',
+      paint: { 'fill-color': ['coalesce', ['get', 'color'], '#00d4ff'], 'fill-opacity': ['coalesce', ['get', 'opacity'], 0] },
+    });
+    map.addLayer({
+      id: 'preview-zone-line', type: 'line', source: 'preview-zone',
+      paint: { 'line-color': ['coalesce', ['get', 'color'], '#00d4ff'], 'line-width': 2, 'line-dasharray': [3, 2] },
+    });
+
+    map.addSource('preview-corridor', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'preview-corridor-line', type: 'line', source: 'preview-corridor',
+      paint: { 'line-color': '#3ddc84', 'line-width': 16, 'line-opacity': 0.22 },
+    });
+    map.addLayer({
+      id: 'preview-corridor-core', type: 'line', source: 'preview-corridor',
+      paint: { 'line-color': '#3ddc84', 'line-width': 2, 'line-dasharray': [4, 3] },
+    });
+
     this.ready = true;
     this.renderZones(this.store.zones());
     this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
@@ -244,7 +276,7 @@ export class TheatreMap implements OnDestroy {
     const features: Feature[] = [];
     for (const z of zones) {
       if (!z.is_active) continue;
-      const props = { id: z.id, name: z.name, color: ZONE_COLORS[z.zone_type] ?? '#888', dynamic: z.detected_by !== 'PRECONFIGURED' };
+      const props = { id: z.id, name: z.name, zone_type: z.zone_type, color: ZONE_COLORS[z.zone_type] ?? '#888', dynamic: z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS' };
       if (z.geometry_type === 'CIRCLE' && z.center && z.radius_m) {
         if (z.zone_type === 'WEATHER') {
           const kind = z.weather ?? 'STORM';
@@ -278,23 +310,55 @@ export class TheatreMap implements OnDestroy {
     (map.getSource('zones') as GeoJSONSource).setData({ type: 'FeatureCollection', features });
 
     const seen = new Set<number>();
+    let patrolIndex = 0;
     for (const z of zones) {
       if (!z.is_active) continue;
-      const anchor = z.center ?? z.waypoints?.[Math.floor((z.waypoints.length - 1) / 2)];
-      if (!anchor) continue;
+
+      let anchorLngLat: [number, number];
+      let anchorPos: 'center' | 'bottom' | 'left' = 'center';
+      let offset: [number, number] = [0, -10];
+
+      if (z.zone_type === 'PATROL' && z.center && z.radius_m) {
+        // Distribute label angle along northern arc to prevent collisions between concentric or nested zones
+        const angles = [90, 125, 55, 155, 25]; // 90=N, >90=NW, <90=NE
+        const angleDeg = angles[patrolIndex % angles.length];
+        patrolIndex++;
+        const angleRad = (angleDeg * Math.PI) / 180.0;
+        const cosLat = Math.cos((z.center[0] * Math.PI) / 180.0);
+        const dLat = (z.radius_m * Math.sin(angleRad)) / 111139.0;
+        const dLon = (z.radius_m * Math.cos(angleRad)) / (111139.0 * cosLat);
+        anchorLngLat = [z.center[1] + dLon, z.center[0] + dLat];
+        anchorPos = 'bottom';
+        offset = [0, -4];
+      } else if (z.zone_type === 'SAFE_CORRIDOR' && z.waypoints?.length) {
+        const mid = z.waypoints[Math.floor((z.waypoints.length - 1) / 2)];
+        anchorLngLat = [mid[1], mid[0]];
+        anchorPos = 'left';
+        offset = [14, 0];
+      } else if (z.center) {
+        anchorLngLat = [z.center[1], z.center[0]];
+        anchorPos = 'center';
+        offset = [0, -12];
+      } else {
+        continue;
+      }
+
       seen.add(z.id);
       const existing = this.zoneLabels.get(z.id);
       if (existing) {
-        existing.setLngLat([anchor[1], anchor[0]]); // zones tracked by ORION can move
+        existing.setLngLat(anchorLngLat);
         continue;
       }
       const el = document.createElement('div');
       el.className = `zone-label zone-${z.zone_type}`;
-      const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : z.detected_by !== 'PRECONFIGURED' ? 'marked by ORION' : '';
-      el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
-      const isArea = !!(z.center && z.radius_m);
-      const marker = new maplibregl.Marker({ element: el, anchor: isArea ? 'center' : 'left', offset: isArea ? [0, -14] : [12, 0] })
-        .setLngLat([anchor[1], anchor[0]])
+      if (z.zone_type === 'PATROL') {
+        el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
+      } else {
+        const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : (z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS') ? 'detected by ORION' : '';
+        el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
+      }
+      const marker = new maplibregl.Marker({ element: el, anchor: anchorPos, offset })
+        .setLngLat(anchorLngLat)
         .addTo(map);
       this.zoneLabels.set(z.id, marker);
     }
@@ -393,6 +457,160 @@ export class TheatreMap implements OnDestroy {
       })),
     });
   }
+  protected toggleMapMode(mode: 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
+    if (this.store.mapMode() === mode) {
+      this.cancelMapMode();
+    } else {
+      this.cancelMapMode();
+      this.store.setMapMode(mode);
+    }
+  }
+
+  protected finishCorridor(): void {
+    if (this.corridorPoints.length >= 2) {
+      const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'SAFE_CORRIDOR').length;
+      const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
+      const label = greek[count] ?? `Route-${count + 1}`;
+      this.store.createSafeCorridor(`Safe Corridor ${label}`, this.corridorPoints);
+    }
+    this.cancelMapMode();
+  }
+
+  protected cancelMapMode(): void {
+    if (this.isDrawingZone) {
+      this.isDrawingZone = false;
+      this.map?.dragPan.enable();
+    }
+    this.drawCenter = null;
+    this.corridorPoints = [];
+    (this.map?.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
+    (this.map?.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData(empty());
+    this.store.setMapMode('view');
+  }
+
+  private setupInteractions(map: MlMap): void {
+    map.on('mousedown', e => {
+      const mode = this.store.mapMode();
+      if ((mode === 'create_patrol' || mode === 'create_threat') && e.originalEvent.button === 0) {
+        this.isDrawingZone = true;
+        this.drawCenter = [e.lngLat.lat, e.lngLat.lng];
+        map.dragPan.disable();
+      }
+    });
+
+    map.on('mousemove', e => {
+      const mode = this.store.mapMode();
+      if (this.isDrawingZone && this.drawCenter) {
+        const radiusM = distanceM(this.drawCenter[0], this.drawCenter[1], e.lngLat.lat, e.lngLat.lng);
+        const ring = circleRing(this.drawCenter[0], this.drawCenter[1], Math.max(radiusM, 20));
+        const color = mode === 'create_threat' ? '#ff5463' : '#00d4ff';
+        const opacity = mode === 'create_threat' ? 0.15 : 0;
+        (map.getSource('preview-zone') as GeoJSONSource | undefined)?.setData({
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature',
+            properties: { radiusM, color, opacity },
+            geometry: { type: 'Polygon', coordinates: [ring] },
+          }],
+        });
+      }
+    });
+
+    map.on('mouseup', e => {
+      const mode = this.store.mapMode();
+      if (this.isDrawingZone && this.drawCenter) {
+        this.isDrawingZone = false;
+        map.dragPan.enable();
+        const radiusM = distanceM(this.drawCenter[0], this.drawCenter[1], e.lngLat.lat, e.lngLat.lng);
+        (map.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
+        if (radiusM >= 60) {
+          if (mode === 'create_patrol') {
+            const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL').length;
+            const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
+            const label = greek[count] ?? `Zone-${count + 1}`;
+            this.store.createPatrolZone(`Patrol Zone ${label}`, this.drawCenter, radiusM);
+          } else if (mode === 'create_threat') {
+            const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'THREAT').length;
+            const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
+            const label = greek[count] ?? `Sector-${count + 1}`;
+            this.store.createThreatZone(`Restricted Threat Zone ${label}`, this.drawCenter, radiusM);
+          }
+        }
+        this.drawCenter = null;
+        this.store.setMapMode('view');
+      }
+    });
+
+    map.on('click', e => {
+      const mode = this.store.mapMode();
+      if (mode === 'create_corridor') {
+        this.corridorPoints.push([e.lngLat.lat, e.lngLat.lng]);
+        if (this.corridorPoints.length >= 2) {
+          (map.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: {},
+              geometry: { type: 'LineString', coordinates: this.corridorPoints.map(pt => [pt[1], pt[0]]) },
+            }],
+          });
+        }
+      } else if (mode === 'delete_zone') {
+        const clickedLat = e.lngLat.lat;
+        const clickedLon = e.lngLat.lng;
+        // Prioritize circular zones
+        const activeCircles = this.store.zones().filter(z => z.is_active && z.center && z.radius_m);
+        const clickedCircle = activeCircles.find(
+          z => distanceM(z.center![0], z.center![1], clickedLat, clickedLon) <= z.radius_m!
+        );
+        if (clickedCircle) {
+          this.store.deleteZone(clickedCircle.id);
+          this.store.setMapMode('view');
+          return;
+        }
+        // Then corridors
+        const activeCorridors = this.store.zones().filter(z => z.is_active && z.zone_type === 'SAFE_CORRIDOR' && z.waypoints?.length);
+        const clickedCorridor = activeCorridors.find(c => {
+          return c.waypoints!.some(wp => distanceM(wp[0], wp[1], clickedLat, clickedLon) <= 220);
+        });
+        if (clickedCorridor) {
+          this.store.deleteZone(clickedCorridor.id);
+        }
+        this.store.setMapMode('view');
+      } else if (mode === 'pick_loiter') {
+        this.store.setPickedLoiterPoint([e.lngLat.lat, e.lngLat.lng]);
+        this.store.pushToast('ok', 'Loiter point selected', `Target coordinates: [${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)}]`);
+        this.store.setMapMode('view');
+      }
+    });
+
+    map.on('dblclick', e => {
+      if (this.store.mapMode() === 'create_corridor') {
+        e.preventDefault();
+        this.finishCorridor();
+      }
+    });
+  }
+
+  private renderLoiterTarget(pt: [number, number] | null): void {
+    if (!this.map) return;
+    if (!pt) {
+      this.loiterMarker?.remove();
+      this.loiterMarker = null;
+      return;
+    }
+    if (!this.loiterMarker) {
+      const el = document.createElement('div');
+      el.className = 'loiter-target-marker';
+      el.innerHTML = '<span class="reticle">&#9678;</span><span class="label">LOITER</span>';
+      this.loiterMarker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([pt[1], pt[0]])
+        .addTo(this.map);
+    } else {
+      this.loiterMarker.setLngLat([pt[1], pt[0]]);
+    }
+  }
+
 }
 
 /** Fetches the real basemap style, or null when offline / slow, so the caller can fall back to the grid. */
