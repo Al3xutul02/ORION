@@ -82,7 +82,9 @@ class CopilotService:
         if self._client is None:
             # A key in .env reaches us through settings (pydantic doesn't export it to the process
             # environment); otherwise the SDK reads GEMINI_API_KEY / GOOGLE_API_KEY from the environment.
-            options = types.HttpOptions(timeout=60_000)  # milliseconds
+            # Milliseconds; also sent to Google as the server-side deadline. Flash models answer in
+            # seconds, so a long wait means overload and it's quicker to try the fallback model.
+            options = types.HttpOptions(timeout=25_000)
             try:
                 if settings.GEMINI_API_KEY:
                     self._client = genai.Client(api_key=settings.GEMINI_API_KEY, http_options=options)
@@ -123,18 +125,27 @@ class CopilotService:
         ]
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
+        config = types.GenerateContentConfig(
+            system_instruction=[SYSTEM_PROMPT, context],
+            max_output_tokens=16000,
+            thinking_config=types.ThinkingConfig(
+                thinking_level=THINKING_LEVEL.get(settings.COPILOT_EFFORT, types.ThinkingLevel.LOW)
+            ),
+        )
+        models = [settings.COPILOT_MODEL]
+        if settings.COPILOT_FALLBACK_MODEL and settings.COPILOT_FALLBACK_MODEL != settings.COPILOT_MODEL:
+            models.append(settings.COPILOT_FALLBACK_MODEL)
+
         try:
-            response = self._get_client().models.generate_content(
-                model=settings.COPILOT_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=[SYSTEM_PROMPT, context],
-                    max_output_tokens=16000,
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=THINKING_LEVEL.get(settings.COPILOT_EFFORT, types.ThinkingLevel.LOW)
-                    ),
-                ),
-            )
+            for i, model_id in enumerate(models):
+                try:
+                    response = self._get_client().models.generate_content(model=model_id, contents=contents, config=config)
+                    break
+                except errors.ServerError as e:
+                    # Overloaded or timed out on Google's side: the fallback model usually still answers.
+                    if i == len(models) - 1:
+                        raise
+                    logger.warning("Copilot model %s unavailable (%s), falling back to %s", model_id, e.code, models[i + 1])
         except errors.ClientError as e:
             msg = e.message or ""
             if "API key" in msg:

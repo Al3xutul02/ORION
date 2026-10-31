@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     # GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
     GEMINI_API_KEY: Optional[str] = None
     COPILOT_MODEL: str = "gemini-3.8-flash"
+    # Used when the main model is overloaded or times out (Gemini 503 / 504).
+    COPILOT_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
     COPILOT_EFFORT: str = "low"  # thinking level: low | medium | high; low keeps chat answers quick
 
 

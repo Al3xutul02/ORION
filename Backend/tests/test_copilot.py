@@ -126,3 +126,23 @@ def test_server_ledger_is_used_when_no_events_are_sent(client, fake_gemini):
     assert res.status_code == 200
     assert res.json()["source"] == "server"
     assert "<aar_log>" in context_of(fake.calls[0])
+
+
+class FlakyModels(FakeModels):
+    """The main model is overloaded; the fallback answers."""
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise errors.ServerError(503, {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}})
+        return SimpleNamespace(text=self.text, model_version=kwargs["model"],
+                               candidates=[SimpleNamespace(finish_reason=types.FinishReason.STOP)], prompt_feedback=None)
+
+
+def test_overloaded_model_falls_back(client, monkeypatch):
+    from app.core.config import settings
+    models = FlakyModels(text="ok [#2]")
+    monkeypatch.setattr(copilot_service, "_client", SimpleNamespace(models=models))
+    data = ask(client).json()
+    assert [c["model"] for c in models.calls] == [settings.COPILOT_MODEL, settings.COPILOT_FALLBACK_MODEL]
+    assert data["model"] == settings.COPILOT_FALLBACK_MODEL and data["cited_ids"] == [2]
