@@ -31,22 +31,11 @@ export class DecisionPanel {
 
   protected history = computed(() => this.store.recommendations().filter(r => r.status !== 'PENDING'));
 
-  private prevPendingCount = 0;
-
   constructor() {
     // Switching drones cancels a half-finished confirmation.
     effect(() => {
       this.store.selectedDroneId();
       this.confirming.set(null);
-    });
-
-    // When new recommendations arrive, bring them to the operator's attention
-    effect(() => {
-      const pending = this.store.pendingRecommendations();
-      if (pending.length > this.prevPendingCount && this.confirming() === null) {
-        this.activeTab.set('suggestions');
-      }
-      this.prevPendingCount = pending.length;
     });
   }
 
@@ -69,6 +58,29 @@ export class DecisionPanel {
 
   protected pretty(action: string): string {
     return action.replaceAll('_', ' ').toLowerCase();
+  }
+
+  protected eventLabel(event: string): string {
+    switch (event) {
+      case 'SENSORS_RECALIBRATED_SAFE':
+        return 'Recalibrated';
+      case 'SPOOFING_ATTACK_DETECTED':
+        return 'GPS Spoofed';
+      case 'TRUST_DEGRADED_EW_HAZARD':
+        return 'EW Hazard';
+      case 'TRUST_DEGRADED_NO_CORRIDOR':
+        return 'Hazard Area';
+      case 'WEATHER_LIMIT_EXCEEDED':
+        return 'Severe Weather';
+      default:
+        return event.replaceAll('_', ' ');
+    }
+  }
+
+  protected eventLevel(event: string): 'green' | 'yellow' | 'red' {
+    if (event.includes('SAFE')) return 'green';
+    if (event.includes('SPOOF') || event.includes('WEATHER')) return 'yellow';
+    return 'red';
   }
 
   protected recReason(rec: Recommendation): string {

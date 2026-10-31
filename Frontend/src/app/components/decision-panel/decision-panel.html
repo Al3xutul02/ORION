@@ -30,29 +30,12 @@
         }
       </button>
     </div>
-
-    <span class="spacer"></span>
-
-    @if (store.pendingRecommendations().length && activeTab() === 'commands') {
-      <button
-        type="button"
-        class="chip yellow clickable"
-        (click)="setTab('suggestions')"
-        title="View suggestions awaiting operator approval"
-      >
-        <span class="dot"></span>{{ store.pendingRecommendations().length }} awaiting
-      </button>
-    }
   </header>
 
   <div class="panel-body">
     <!-- TAB 1: COMMANDS (Direct Drone Control) -->
     @if (activeTab() === 'commands') {
       <div class="tab-content commands-tab">
-        <div class="section-intro">
-          <span class="sub">Direct Drone Commands</span>
-        </div>
-
         <div class="picker" role="radiogroup" aria-label="Drone to command">
           @for (d of store.drones(); track d.drone_id) {
             <button
@@ -80,7 +63,7 @@
           <ul class="matrix">
             @for (a of actions(); track a.id) {
               <li [class.allowed]="a.allowed" [class.recommended]="a.recommended" [class.active]="a.active">
-                <span class="icon" aria-hidden="true">{{ a.allowed ? '✓' : '✕' }}</span>
+                <span class="icon" aria-hidden="true">{{ a.allowed ? '&#10003;' : '&#10005;' }}</span>
                 <div class="what">
                   <strong>{{ a.label }}</strong>
                   <span>{{ a.reason }}</span>
@@ -93,7 +76,7 @@
                   @if (a.active && a.allowed) {
                     <span class="chip green">Active</span>
                   } @else if (a.active) {
-                    <span class="chip red" title="The drone is doing this now, but it is not safe">Active · unsafe</span>
+                    <span class="chip red" title="The drone is doing this now, but it is not safe">Active &middot; unsafe</span>
                   } @else if (!a.allowed) {
                     <span class="chip red">Blocked</span>
                   } @else if (confirming() === a.id) {
@@ -139,11 +122,11 @@
           @for (rec of store.pendingRecommendations(); track rec.id) {
             <article class="rec">
               <div class="rec-head">
-                <div class="head-left">
-                  <strong>Drone {{ rec.drone_id }}</strong>
-                  <span class="chip-event">{{ pretty(rec.trigger_event) }}</span>
+                <div class="rec-identity">
+                  <strong class="rec-drone">Drone {{ rec.drone_id }}</strong>
+                  <span class="chip-event {{ eventLevel(rec.trigger_event) }}">{{ eventLabel(rec.trigger_event) }}</span>
                 </div>
-                <span class="mono faint">#{{ rec.id }} · {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
+                <span class="rec-meta mono">#{{ rec.id }} &middot; {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
               </div>
 
               <div class="rationale">
@@ -184,7 +167,7 @@
           }
         } @else {
           <div class="empty-suggestions">
-            <span class="check-icon">✓</span>
+            <span class="check-icon">&#10003;</span>
             <strong>No Pending Suggestions</strong>
             <p>All active drones are operating within nominal flight envelopes or executing approved directives.</p>
             <button class="btn sm" type="button" (click)="setTab('commands')">
@@ -199,7 +182,7 @@
             @for (r of history(); track r.id) {
               <li>
                 <span class="chip" [class.green]="r.status === 'APPROVED' || r.status === 'EXECUTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
-                <span>D{{ r.drone_id }} · {{ pretty(r.recommended_action) }}</span>
+                <span>D{{ r.drone_id }} &middot; {{ pretty(r.recommended_action) }}</span>
                 <span class="mono faint">{{ r.operator_id }} {{ r.approved_at | date: 'HH:mm:ss' }}</span>
               </li>
             }
