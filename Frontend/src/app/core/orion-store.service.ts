@@ -92,9 +92,14 @@ export class OrionStore implements OnDestroy {
   readonly highlightedEvents = signal<number[]>([]);
   readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+  readonly commandScope = signal<'drone' | 'zone'>('drone');
 
   setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
     this.mapMode.set(mode);
+  }
+
+  setCommandScope(scope: 'drone' | 'zone'): void {
+    this.commandScope.set(scope);
   }
 
   setPickedLoiterPoint(point: [number, number] | null): void {
@@ -616,6 +621,9 @@ export class OrionStore implements OnDestroy {
 
   selectDrone(id: number | null): void {
     this.selectedDroneId.set(id);
+    if (id !== null) {
+      this.commandScope.set('drone');
+    }
   }
 
   dismissToast(id: number): void {
