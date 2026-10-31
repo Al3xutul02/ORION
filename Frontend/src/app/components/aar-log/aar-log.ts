@@ -18,6 +18,7 @@ const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
   OPERATOR_APPROVAL: 'ok',
   COMMAND_EXECUTED: 'ok',
   DRONE_RECOVERED: 'ok',
+  ROUTE_REPLANNED: 'warn',
   COMMAND_LINK_LOST: 'critical',
   EW_EMITTER_ACTIVE: 'critical',
   GPS_DEGRADED_SINGLE: 'warn',

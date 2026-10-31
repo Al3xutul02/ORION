@@ -1,4 +1,4 @@
-import { ActionOption, evaluateActions, egressPaths, distanceM } from './geo';
+import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle } from './geo';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, Zone } from './models';
 
@@ -62,7 +62,7 @@ interface SimDrone {
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
   egressLeg: number;
-  route: 'RTL' | 'CORRIDOR';
+  route: 'RTL' | 'CORRIDOR' | 'ROUTE';
 }
 
 interface Jammer {
@@ -303,6 +303,17 @@ export class OfflineSimulator {
         d.egressPath = paths.viaCorridor;
         d.mode = 'EGRESS';
         break;
+      case 'SAFE_ROUTE_RETREAT':
+        if (paths.viaRoute.length) {
+          d.route = 'ROUTE';
+          d.egressPath = paths.viaRoute;
+          d.mode = 'EGRESS';
+        } else {
+          d.mode = 'LOITER';
+          d.loiterUntil = Infinity;
+          d.egressPath = [];
+        }
+        break;
       case 'LOITER':
         d.mode = 'LOITER';
         d.loiterUntil = Infinity;
@@ -399,7 +410,7 @@ export class OfflineSimulator {
         // Recompute egress route from the restored true physical position
         const state = this.states().find(s => s.drone_id === d.id)!;
         const paths = egressPaths(state, this.zones);
-        d.egressPath = d.route === 'RTL' ? paths.direct : paths.viaCorridor;
+        d.egressPath = d.route === 'RTL' ? paths.direct : d.route === 'ROUTE' ? paths.viaRoute : paths.viaCorridor;
         d.egressLeg = 0;
       }
       this.log('GPS_RESTORED', d.id, {
@@ -513,6 +524,24 @@ export class OfflineSimulator {
       if (d.egressPath.length && this.elapsed >= d.loiterUntil) d.mode = 'EGRESS';
       return;
     }
+    if (d.mode === 'EGRESS' && d.route === 'ROUTE' && this.routeLegBlocked(d)) {
+      // A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
+      const state = this.states().find(s => s.drone_id === d.id)!;
+      const replanned = egressPaths(state, this.zones).viaRoute;
+      d.egressLeg = 0;
+      if (replanned.length) {
+        d.egressPath = replanned;
+      } else {
+        d.mode = 'LOITER';
+        d.loiterUntil = Infinity;
+        d.egressPath = [];
+      }
+      this.log('ROUTE_REPLANNED', d.id, {
+        reason: 'A hazard zone now crosses the planned route',
+        result: replanned.length ? `${replanned.length - 1} legs` : 'No safe route: holding (LOITER)',
+      }, 'ORION_PATHFINDER');
+      return;
+    }
     if (d.mode === 'EGRESS') {
       let budget = EGRESS_SPEED_MS * dt;
       // Egress paths are in the drone's reported (possibly spoofed) frame; strip the offset while moving.
@@ -532,9 +561,20 @@ export class OfflineSimulator {
       }
       if (d.egressLeg >= d.egressPath.length - 1) {
         d.mode = 'LANDED';
-        this.log('DRONE_RECOVERED', d.id, { location: 'Base Forward Alpha', via: d.route === 'RTL' ? 'Direct return-to-home' : 'Safe Corridor Alpha' });
+        this.log('DRONE_RECOVERED', d.id, { location: 'Base Forward Alpha', via: d.route === 'RTL' ? 'Direct return-to-home' : d.route === 'ROUTE' ? 'Computed safe route (A*)' : 'Safe Corridor Alpha' });
       }
     }
+  }
+
+  /** True when the leg being flown now crosses a hazard the drone isn't already inside. */
+  private routeLegBlocked(d: SimDrone): boolean {
+    const target = d.egressPath[d.egressLeg + 1];
+    if (!target) return false;
+    const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+    const lat = d.lat + off.lat, lon = d.lon + off.lon;
+    return hazardZones(this.zones).some(z =>
+      distanceM(lat, lon, z.center![0], z.center![1]) > z.radius_m! &&
+      segmentIntersectsCircle(lat, lon, target[1], target[0], z.center![0], z.center![1], z.radius_m!));
   }
 
   private states(): DroneState[] {

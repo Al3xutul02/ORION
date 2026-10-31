@@ -57,6 +57,10 @@
 .path {
   width: 14px;
   border-top: 2px dashed var(--red);
+
+  &.route {
+    border-top-color: var(--accent);
+  }
 }
 
 .overlay-tr {

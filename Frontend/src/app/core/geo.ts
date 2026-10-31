@@ -1,5 +1,6 @@
 import { ORION_CONFIG } from './config';
 import { DroneState, Zone } from './models';
+import { PlannedRoute, planRoute } from './pathfinding';
 
 const M_PER_DEG_LAT = 111139;
 
@@ -51,7 +52,7 @@ export function zoneContaining(zones: Zone[], lat: number, lon: number): Zone | 
 }
 
 export interface ActionOption {
-  id: 'RETURN_TO_HOME' | 'LOITER' | 'SAFE_CORRIDOR_RETREAT' | 'CONTINUE_PATROL';
+  id: 'RETURN_TO_HOME' | 'LOITER' | 'SAFE_CORRIDOR_RETREAT' | 'SAFE_ROUTE_RETREAT' | 'CONTINUE_PATROL';
   label: string;
   allowed: boolean;
   recommended: boolean;
@@ -64,8 +65,33 @@ const ACTIVE_MODE: Record<ActionOption['id'], string> = {
   RETURN_TO_HOME: 'RTL',
   LOITER: 'LOITER',
   SAFE_CORRIDOR_RETREAT: 'CORRIDOR',
+  SAFE_ROUTE_RETREAT: 'ROUTE',
   CONTINUE_PATROL: 'GUIDED',
 };
+
+// Planning is cheap but runs on every telemetry tick for the selected drone; reuse recent results.
+const routeCache = new Map<string, PlannedRoute | null>();
+
+/** A* route from the drone to Home Base around every active hazard zone (see pathfinding.ts). */
+export function safeRoute(drone: DroneState, zones: Zone[]): PlannedRoute | null {
+  const hazards = hazardZones(zones).map(z => ({ lat: z.center![0], lon: z.center![1], radiusM: z.radius_m!, name: z.name }));
+  const key = [
+    drone.latitude.toFixed(4), drone.longitude.toFixed(4),
+    ...hazards.map(h => `${h.lat.toFixed(4)},${h.lon.toFixed(4)},${Math.round(h.radiusM)}`),
+  ].join('|');
+  if (!routeCache.has(key)) {
+    if (routeCache.size > 64) routeCache.clear();
+    const base = ORION_CONFIG.homeBase;
+    routeCache.set(key, planRoute([drone.latitude, drone.longitude], [base.lat, base.lon], hazards));
+  }
+  return routeCache.get(key)!;
+}
+
+export function describeRoute(route: PlannedRoute): string {
+  const legs = route.waypoints.length - 1;
+  const around = route.avoided.length ? `, around ${route.avoided.join(', ')}` : '';
+  return `${legs} leg${legs === 1 ? '' : 's'}, ${(route.lengthM / 1000).toFixed(1)} km${around}`;
+}
 
 function corridorRoute(drone: DroneState, corridor: Zone): [number, number][] {
   if (!corridor.waypoints?.length) return [];
@@ -113,6 +139,8 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
   const corridorAllowed = !!corridor && !corridorBlocking;
 
   const rtlAllowed = !blocking;
+  // Only worth planning when the straight line is blocked; otherwise RTL is the route.
+  const route = rtlAllowed ? null : safeRoute(drone, zones);
   const options: Omit<ActionOption, 'active'>[] = [
     {
       id: 'RETURN_TO_HOME',
@@ -140,6 +168,17 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
           : 'Egress route avoids known hazard zones',
     },
     {
+      id: 'SAFE_ROUTE_RETREAT',
+      label: 'Return via computed safe route',
+      allowed: rtlAllowed || !!route,
+      recommended: degraded && !rtlAllowed && !corridorAllowed && !!route,
+      reason: rtlAllowed
+        ? 'Direct path is clear: same as return-to-home'
+        : route
+          ? `A* route: ${describeRoute(route)}`
+          : 'No safe route around the active zones',
+    },
+    {
       id: 'CONTINUE_PATROL',
       label: 'Continue patrol',
       allowed: drone.trust_status === 'GREEN',
@@ -156,10 +195,12 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
   return handled ? withActive.map(o => ({ ...o, recommended: false })) : withActive;
 }
 
-/** Direct base path + corridor egress path, as [lon, lat] lines for the map overlay. */
+/** Direct base path, corridor egress path and computed safe route, as [lon, lat] lines for the map. */
 export function egressPaths(drone: DroneState, zones: Zone[]) {
   const base = ORION_CONFIG.homeBase;
   const direct: [number, number][] = [[drone.longitude, drone.latitude], [base.lon, base.lat]];
   const { route: viaCorridor } = selectCorridor(drone, zones);
-  return { direct, viaCorridor };
+  const planned = safeRoute(drone, zones);
+  const viaRoute: [number, number][] = planned ? planned.waypoints.map(([la, lo]) => [lo, la] as [number, number]) : [];
+  return { direct, viaCorridor, viaRoute };
 }

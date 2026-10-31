@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
 from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
-from app.services.theatre_rules import theatre_rules
+from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
@@ -187,6 +187,15 @@ class OrionFleetSimulator:
                 d["loiter_until"] = self.elapsed_time + 6.0
             else:
                 d["mode"] = "CORRIDOR"
+        elif action == "SAFE_ROUTE_RETREAT":
+            route = theatre_rules.plan_safe_route(d["lat"], d["lon"])
+            if route:
+                d["mode"] = "ROUTE"
+                d["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d["mode"] = "LOITER"
+                d["loiter_until"] = float("inf")
+                d["egress_waypoints"] = []
         elif action == "CONTINUE_PATROL":
             if d["spoofed"]:
                 off_lat, off_lon = d.get("spoof_offset", (0.0, 0.0))
@@ -440,7 +449,29 @@ class OrionFleetSimulator:
                 d_data["mode"] = "CORRIDOR"
             return
 
-        if mode in ("CORRIDOR", "RTL"):
+        if mode == "ROUTE" and d_data["egress_waypoints"] and self._route_leg_blocked(d_data):
+            # A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
+            route = theatre_rules.plan_safe_route(d_data["lat"], d_data["lon"])
+            if route:
+                d_data["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d_data["mode"] = "LOITER"
+                d_data["loiter_until"] = float("inf")
+                d_data["egress_waypoints"] = []
+            aar_service.log_event(
+                db=db,
+                event_type="ROUTE_REPLANNED",
+                drone_id=d_id,
+                details={
+                    "reason": "A hazard zone now crosses the planned route",
+                    "result": f"{len(route['waypoints']) - 1} legs, {route['length_m'] / 1000:.1f} km" if route else "No safe route: holding (LOITER)",
+                    "mission_time_s": self.elapsed_time
+                },
+                operator_id="ORION_PATHFINDER"
+            )
+            return
+
+        if mode in ("CORRIDOR", "RTL", "ROUTE"):
             wps = d_data["egress_waypoints"]
             if not wps:
                 d_data["mode"] = "PATROL"
@@ -465,7 +496,7 @@ class OrionFleetSimulator:
                         drone_id=d_id,
                         details={
                             "location": "Base Forward Alpha",
-                            "via": "Direct Return-to-Home" if mode == "RTL" else "Safe Corridor Egress",
+                            "via": {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress"),
                             "mission_time_s": self.elapsed_time
                         },
                         operator_id="SYSTEM"
@@ -512,6 +543,20 @@ class OrionFleetSimulator:
                 d_data["lon"] = nominal_lon
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
 
+    def _route_leg_blocked(self, d_data: Dict[str, Any]) -> bool:
+        """True when the leg the drone is flying now crosses a hazard it isn't already inside."""
+        lat, lon = d_data["lat"], d_data["lon"]
+        t_lat, t_lon = d_data["egress_waypoints"][0]
+        for z in theatre_rules.active_danger_zones():
+            if z.get("geometry_type") != "CIRCLE":
+                continue
+            c_lat, c_lon = z["center"]
+            if haversine_distance_m(lat, lon, c_lat, c_lon) <= z["radius_m"]:
+                continue
+            if line_segment_intersects_circle(lat, lon, t_lat, t_lon, c_lat, c_lon, z["radius_m"]):
+                return True
+        return False
+
     def _update_drone_recalibration(self, db, d_id: int, d_data: Dict[str, Any], dt: float):
         """
         Checks whether a drone is inside an active hazard zone or in clean airspace.
@@ -543,7 +588,7 @@ class OrionFleetSimulator:
 
         # Drone is degraded (spoofed or jammed) AND outside all hazard zones.
         # Recalibrate faster (3.5s) when actively stabilizing in LOITER/CORRIDOR/RTL, or 6s in PATROL.
-        recal_threshold = 3.5 if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL") else 6.0
+        recal_threshold = 3.5 if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL", "ROUTE") else 6.0
         d_data["safe_airspace_time"] = d_data.get("safe_airspace_time", 0.0) + dt
 
         if d_data["safe_airspace_time"] >= recal_threshold:
@@ -553,7 +598,11 @@ class OrionFleetSimulator:
                 off_lat, off_lon = d_data.get("spoof_offset", (0.0, 0.0))
                 d_data["lat"] -= off_lat
                 d_data["lon"] -= off_lon
-                if d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
+                if d_data["egress_waypoints"] and d_data["mode"] == "ROUTE":
+                    # The old route was planned from the false position: plan again from the true one.
+                    route = theatre_rules.plan_safe_route(d_data["lat"], d_data["lon"])
+                    d_data["egress_waypoints"] = [list(pt) for pt in route["waypoints"][1:]] if route else []
+                elif d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
                     best_corr, _ = theatre_rules.find_best_corridor(d_data["lat"], d_data["lon"])
                     corridors = theatre_rules.active_corridors()
                     chosen = best_corr or (corridors[0] if corridors else None)
@@ -641,7 +690,7 @@ class OrionFleetSimulator:
 
                     mode = d_data["mode"]
                     flight_mode = "GUIDED" if mode == "PATROL" else mode
-                    speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL") else d_data["speed"])
+                    speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL", "ROUTE") else d_data["speed"])
 
                     telem = {
                         "drone_id": d_id,

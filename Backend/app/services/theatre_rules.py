@@ -3,6 +3,8 @@ import math
 import random
 from typing import List, Dict, Any, Optional, Tuple
 
+from app.services.pathfinder import plan_route
+
 
 def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Returns great-circle distance in meters between two WGS84 coordinates."""
@@ -451,6 +453,15 @@ class TheatreRulesEngine:
 
         return None, last_block_reason or "All safe corridors blocked by hazard zones"
 
+    def plan_safe_route(self, drone_lat: float, drone_lon: float) -> Optional[Dict[str, Any]]:
+        """A* route from the drone to Home Base around every active hazard zone (see pathfinder.py)."""
+        hazards = [
+            (z["center"][0], z["center"][1], z["radius_m"], z["name"])
+            for z in self.active_danger_zones()
+            if z.get("geometry_type") == "CIRCLE"
+        ]
+        return plan_route((drone_lat, drone_lon), (self.home_base["lat"], self.home_base["lon"]), hazards)
+
     def evaluate_tactical_recommendation(
         self,
         drone_id: int,
@@ -494,6 +505,27 @@ class TheatreRulesEngine:
                         {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
                     ]
                 }
+            route = self.plan_safe_route(drone_lat, drone_lon)
+            if route:
+                legs = len(route["waypoints"]) - 1
+                return {
+                    "drone_id": drone_id,
+                    "trigger_event": "TRUST_DEGRADED_NO_CORRIDOR",
+                    "blocked_action": "RETURN_TO_HOME",
+                    "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
+                    "recommended_action": "SAFE_ROUTE_RETREAT",
+                    "recommendation_details": (
+                        f"1. Fly the computed safe route to Base: {legs} legs, "
+                        f"{route['length_m'] / 1000:.1f} km, keeping clear of every active hazard zone. "
+                        "2. Re-plan automatically if the zones change."
+                    ),
+                    "safe_waypoints": [
+                        {"lat": lat, "lon": lon, "alt": 120.0, "action": "WAYPOINT"}
+                        for lat, lon in route["waypoints"][1:-1]
+                    ] + [
+                        {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
+                    ]
+                }
             else:
                 return {
                     "drone_id": drone_id,
@@ -503,7 +535,7 @@ class TheatreRulesEngine:
                     "recommended_action": "LOITER",
                     "recommendation_details": (
                         "1. Hold position (LOITER) at current altitude to stabilize. "
-                        "2. Await new Safe Corridor clearance before retreating to Base."
+                        "2. No safe route exists right now: await a Safe Corridor or a change in the zones."
                     ),
                     "safe_waypoints": [
                         {"lat": drone_lat, "lon": drone_lon, "alt": 120.0, "action": "LOITER"}

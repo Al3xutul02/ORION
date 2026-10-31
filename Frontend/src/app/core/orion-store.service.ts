@@ -45,6 +45,7 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
   OPERATOR_COMMAND: { level: 'ok', title: 'Signed command sent' },
   MISSION_REPORT_READY: { level: 'info', title: 'Post-action report ready' },
   DRONE_RECOVERED: { level: 'ok', title: 'Drone recovered at base' },
+  ROUTE_REPLANNED: { level: 'warn', title: 'Route re-planned' },
   GPS_DEGRADED_SINGLE: { level: 'warn', title: 'GPS lost on one drone' },
   COMMAND_LINK_LOST: { level: 'critical', title: 'Command link lost' },
   FAILSAFE_APPLIED: { level: 'warn', title: 'Failsafe applied' },
@@ -81,6 +82,9 @@ export class OrionStore implements OnDestroy {
   readonly highlightedEvents = signal<number[]>([]);
 
   readonly selectedDrone = computed(() => this.drones().find(d => d.drone_id === this.selectedDroneId()) ?? null);
+  /** Drone whose details panel is open (only ever opened by the operator, never by alerts). */
+  readonly detailsDroneId = signal<number | null>(null);
+  readonly detailsDrone = computed(() => this.drones().find(d => d.drone_id === this.detailsDroneId()) ?? null);
   readonly pendingRecommendations = computed(() => this.recommendations().filter(r => r.status === 'PENDING'));
   readonly fleetCounts = computed(() => {
     const ds = this.drones();
@@ -454,6 +458,20 @@ export class OrionStore implements OnDestroy {
 
   highlightEvents(ids: number[]): void {
     this.highlightedEvents.set(ids);
+  }
+
+  /** Operator clicked a drone: select it and open its details (a second click closes them). */
+  openDetails(id: number): void {
+    if (this.detailsDroneId() === id) {
+      this.detailsDroneId.set(null);
+      return;
+    }
+    this.selectedDroneId.set(id);
+    this.detailsDroneId.set(id);
+  }
+
+  closeDetails(): void {
+    this.detailsDroneId.set(null);
   }
 
   selectDrone(id: number | null): void {

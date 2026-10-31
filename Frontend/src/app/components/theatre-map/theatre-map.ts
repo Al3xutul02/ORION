@@ -1,11 +1,12 @@
 import {
-  ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterNextRender, effect, inject, signal, viewChild,
+  ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterNextRender, computed, effect, inject, signal, viewChild,
 } from '@angular/core';
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
 import { circleRing, egressPaths, evaluateActions } from '../../core/geo';
 import { DroneState, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
+import { DroneDetails } from '../drone-details/drone-details';
 
 const ZONE_COLORS: Record<string, string> = {
   BASE: '#5cc8ff',
@@ -37,6 +38,7 @@ const empty = (): FeatureCollection => ({ type: 'FeatureCollection', features: [
 
 @Component({
   selector: 'app-theatre-map',
+  imports: [DroneDetails],
   templateUrl: './theatre-map.html',
   styleUrl: './theatre-map.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -53,6 +55,12 @@ export class TheatreMap implements OnDestroy {
 
   constructor() {
     afterNextRender(() => this.init());
+
+    // The details panel covers the left of the map: shift the theatre right while it's open.
+    effect(() => {
+      const open = this.detailsOpen();
+      if (this.map) this.map.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(open), duration: 500 });
+    });
 
     effect(() => {
       const zones = this.store.zones();
@@ -72,8 +80,17 @@ export class TheatreMap implements OnDestroy {
     this.map?.remove();
   }
 
+  private detailsOpen = computed(() => this.store.detailsDroneId() !== null);
+
+  private fitPadding(open = this.detailsOpen()) {
+    // Keep at least ~240 px of map visible to the right of the panel.
+    const width = this.map?.getContainer().clientWidth ?? 0;
+    const left = open && width > 560 ? Math.min(370, width - 240) : 40;
+    return { top: 40, right: 30, bottom: 40, left };
+  }
+
   protected recenter(): void {
-    this.map?.fitBounds(THEATRE_BOUNDS, { padding: 40, duration: 600 });
+    this.map?.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(), duration: 600 });
   }
 
   protected setBasemap(kind: Basemap): void {
@@ -115,7 +132,7 @@ export class TheatreMap implements OnDestroy {
     map.on('movestart', (e: { originalEvent?: Event }) => { if (e.originalEvent) userMoved = true; });
     this.resizeObserver = new ResizeObserver(() => {
       map.resize();
-      if (!userMoved) map.fitBounds(THEATRE_BOUNDS, { padding: 40, duration: 0 });
+      if (!userMoved) map.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(), duration: 0 });
     });
     this.resizeObserver.observe(this.host().nativeElement);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -171,7 +188,7 @@ export class TheatreMap implements OnDestroy {
       paint: {
         'line-color': ['get', 'color'],
         'line-width': ['case', ['==', ['get', 'kind'], 'blocked'], 2.5, 3],
-        'line-dasharray': ['case', ['==', ['get', 'kind'], 'blocked'], ['literal', [2, 2]], ['literal', [1, 0]]],
+        'line-dasharray': ['match', ['get', 'kind'], 'blocked', ['literal', [2, 2]], 'route', ['literal', [3, 1.5]], ['literal', [1, 0]]],
       },
     });
 
@@ -245,7 +262,7 @@ export class TheatreMap implements OnDestroy {
     const pathFeatures: Feature[] = [];
     if (sel && sel.trust_status !== 'GREEN' && sel.is_armed) {
       const rtl = evaluateActions(sel, zones).find(a => a.id === 'RETURN_TO_HOME')!;
-      const { direct, viaCorridor } = egressPaths(sel, zones);
+      const { direct, viaCorridor, viaRoute } = egressPaths(sel, zones);
       pathFeatures.push({
         type: 'Feature',
         properties: { kind: rtl.allowed ? 'ok' : 'blocked', color: rtl.allowed ? '#3ddc84' : '#ff5463' },
@@ -255,6 +272,13 @@ export class TheatreMap implements OnDestroy {
         pathFeatures.push({
           type: 'Feature', properties: { kind: 'ok', color: '#3ddc84' },
           geometry: { type: 'LineString', coordinates: viaCorridor },
+        });
+      }
+      // A* route around every active zone, for when no corridor is clear (or to compare).
+      if (!rtl.allowed && viaRoute.length) {
+        pathFeatures.push({
+          type: 'Feature', properties: { kind: 'route', color: '#5cc8ff' },
+          geometry: { type: 'LineString', coordinates: viaRoute },
         });
       }
     }
@@ -272,7 +296,7 @@ export class TheatreMap implements OnDestroy {
         el.className = 'drone-marker';
         el.addEventListener('click', ev => {
           ev.stopPropagation();
-          this.store.selectDrone(d.drone_id);
+          this.store.openDetails(d.drone_id);
         });
         marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([d.longitude, d.latitude]).addTo(map);
         this.droneMarkers.set(d.drone_id, marker);
