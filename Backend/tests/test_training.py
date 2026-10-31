@@ -86,7 +86,7 @@ def test_debrief_is_written_from_the_measured_results(client, fake_gemini):
     fake = fake_gemini({
         "summary": "Sesiune solidă, dar decizia pentru D2 a întârziat.",
         "strengths": ["Ai respins corect comanda reluată."],
-        "improvements": ["Ai aprobat loiter pentru D2 în 40 s; ținta este sub 15 s."],
+        "improvements": ["Ai aprobat loiter pentru D2 în 40 s; ținta este sub 10 s."],
     })
     res = client.post("/api/v1/training/debrief", json=RESULTS)
     assert res.status_code == 200

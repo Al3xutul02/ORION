@@ -113,7 +113,7 @@ Toate cele 14 teste verifică:
 Butonul **AI training** din Demo pornește o sesiune de 3 minute fără scriptul fix: un adversar alege atacurile simulate.
 - `POST /api/v1/training/adversary-move`: Gemini (`TRAINING_ADVERSARY_MODEL`, implicit `gemini-3.5-flash-lite`, rapid) primește starea exercițiului (drone, decizii în așteptare, timpii de reacție ai operatorului) și alege următorul eveniment dintr-un meniu fix: spoofing, bruiaj mobil, pierdere de legătură, comandă reluată, vreme. Răspunsul e validat față de ce poate simula browserul acum; maximum 2 drone falsificate simultan.
 - `POST /api/v1/training/debrief`: la final, Gemini scrie feedback-ul în română, doar din cifrele măsurate.
-- **Scorul** (0–100) e calculat în browser din jurnalul cu lanț de hash: timpul de la fiecare recomandare la decizie (ținta: sub 15 s), deciziile ratate, timpul cu drone pe roșu, dronele prinse în vreme peste limită. AI-ul nu dă scorul.
+- **Scorul** (0–100) e calculat în browser din jurnalul cu lanț de hash: timpul de la fiecare recomandare la decizie (ținta: sub 10 s), deciziile ratate, timpul cu drone pe roșu, dronele prinse în vreme peste limită. AI-ul nu dă scorul.
 - Fără backend sau fără Gemini (503), joacă un adversar local cu reguli, iar debrief-ul local folosește aceleași cifre. Adversarul nu are acces la drone sau la comenzi: doar alege evenimente pentru simulatorul din browser.
 
 ---

@@ -52,7 +52,7 @@ export interface TrainingDebrief {
 }
 
 export const SESSION_LENGTH_S = 180;
-export const TARGET_REACTION_S = 15;
+export const TARGET_REACTION_S = 10;
 export const FIRST_MOVE_AT_S = 8;
 export const MOVE_LABELS: Record<AdversaryMoveKind, string> = {
   SPOOF: 'GPS spoofing',

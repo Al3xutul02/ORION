@@ -33,9 +33,9 @@ describe('training score', () => {
 
   it('deducts for slow and missed decisions and red time, and says why', () => {
     const { score, grade, lines } = scoreSession(decisionsFromLog(log, 0, 180), { 2: 45, 4: 15 }, 1, 180);
-    // 40 s: -13 · missed: -15 · 60 s red: -12 · one weather breach: -5
-    expect(lines.map(l => l.points)).toEqual([-13, -15, -12, -5]);
-    expect(score).toBe(55);
+    // 40 s: -15 (30 s over the 10 s target, capped) · missed: -15 · 60 s red: -12 · one weather breach: -5
+    expect(lines.map(l => l.points)).toEqual([-15, -15, -12, -5]);
+    expect(score).toBe(53);
     expect(grade).toBe('Satisfăcător');
     expect(lines[0].label).toContain('40 s');
   });
@@ -43,7 +43,7 @@ describe('training score', () => {
   it('writes the local debrief with the measured numbers', () => {
     const ds = decisionsFromLog(log, 0, 180);
     const text = localDebrief(ds, { 2: 45 }, 55, 'Satisfăcător');
-    expect(text.improvements[0]).toBe('Ai aprobat retragerea pe coridor pentru D2 în 40 s; ținta este sub 15 s.');
+    expect(text.improvements[0]).toBe('Ai aprobat retragerea pe coridor pentru D2 în 40 s; ținta este sub 10 s.');
     expect(text.improvements.some(s => s.includes('D1') && s.includes('fără decizie'))).toBeTrue();
     expect(text.strengths[0]).toContain('cea mai rapidă: loiter pentru D4 în 6 s');
     expect(text.summary).toContain('Scor 55/100');

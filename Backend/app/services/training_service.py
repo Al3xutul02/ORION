@@ -50,7 +50,7 @@ DEBRIEF_PROMPT = """You are the instructor debriefing a drone ground-control ope
 You get the measured results of the session: every decision the operator had to take with how long it took, the time drones spent in red, the events the opposing force staged (with its reasons) and the session score. Write the debrief in Romanian:
 - "summary": 2-3 sentences on how the session went overall.
 - "strengths": 1-3 concrete things done well.
-- "improvements": 1-3 concrete things to improve, each with the measured number and the target, e.g. "Ai aprobat retragerea pentru D2 în 40 s; ținta este sub 15 s."
+- "improvements": 1-3 concrete things to improve, each with the measured number and the target, e.g. "Ai aprobat retragerea pentru D2 în 40 s; ținta este sub 10 s."
 Use only the numbers given. Never invent events, times or drones. Be direct and constructive, like a good instructor. Answer only with the JSON object."""
 
 DEBRIEF_SCHEMA = {

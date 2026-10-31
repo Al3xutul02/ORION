@@ -9,7 +9,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
 import {
-  AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
+  AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
   scoreSession, seededRandom,
 } from './training';
 
@@ -353,7 +353,7 @@ export class OrionStore implements OnDestroy {
         decisions: decisions.map(d => ({ drone_id: d.droneId, action: d.action, issued_at_s: d.issuedAt, reaction_s: d.reactionS, outcome: d.outcome })),
         red_seconds: Object.fromEntries(Object.entries(t.redSeconds).map(([k, v]) => [k, Math.round(v)])),
         attacks: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone, reason: m.reason })),
-        extra: { grade, deductions: lines, target_reaction_s: 15, weather_breaches: breaches },
+        extra: { grade, deductions: lines, target_reaction_s: TARGET_REACTION_S, weather_breaches: breaches },
       });
       text = { summary: res.summary, strengths: res.strengths, improvements: res.improvements };
       source = 'AI';
