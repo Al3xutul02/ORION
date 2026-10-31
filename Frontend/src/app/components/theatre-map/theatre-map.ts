@@ -63,11 +63,7 @@ export class TheatreMap implements OnDestroy {
   constructor() {
     afterNextRender(() => this.init());
 
-    // The details panel covers the left of the map: shift the theatre right while it's open.
-    effect(() => {
-      const open = this.detailsOpen();
-      if (this.map) this.map.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(open), duration: 500 });
-    });
+
 
     effect(() => {
       const zones = this.store.zones();
@@ -315,21 +311,31 @@ export class TheatreMap implements OnDestroy {
       if (!z.is_active) continue;
 
       let anchorLngLat: [number, number];
-      let anchorPos: 'center' | 'bottom' | 'left' = 'center';
+      let anchorPos: 'center' | 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' = 'center';
       let offset: [number, number] = [0, -10];
 
       if (z.zone_type === 'PATROL' && z.center && z.radius_m) {
-        // Distribute label angle along northern arc to prevent collisions between concentric or nested zones
-        const angles = [90, 125, 55, 155, 25]; // 90=N, >90=NW, <90=NE
-        const angleDeg = angles[patrolIndex % angles.length];
+        // Distribute label positions alternating across opposite compass poles (N, S, E, W, etc.)
+        // This guarantees concentric/nested patrol zones will never collide.
+        const layoutConfigs: { angleDeg: number; anchor: 'top' | 'bottom' | 'left' | 'right'; offset: [number, number] }[] = [
+          { angleDeg: 90,  anchor: 'bottom', offset: [0, -6] }, // North (top)
+          { angleDeg: 270, anchor: 'top',    offset: [0, 6] },  // South (bottom)
+          { angleDeg: 0,   anchor: 'left',   offset: [8, 0] },  // East (right)
+          { angleDeg: 180, anchor: 'right',  offset: [-8, 0] }, // West (left)
+          { angleDeg: 45,  anchor: 'bottom', offset: [4, -4] }, // North-East
+          { angleDeg: 225, anchor: 'top',    offset: [-4, 4] }, // South-West
+          { angleDeg: 135, anchor: 'bottom', offset: [-4, -4] },// North-West
+          { angleDeg: 315, anchor: 'top',    offset: [4, 4] },  // South-East
+        ];
+        const cfg = layoutConfigs[patrolIndex % layoutConfigs.length];
         patrolIndex++;
-        const angleRad = (angleDeg * Math.PI) / 180.0;
+        const angleRad = (cfg.angleDeg * Math.PI) / 180.0;
         const cosLat = Math.cos((z.center[0] * Math.PI) / 180.0);
         const dLat = (z.radius_m * Math.sin(angleRad)) / 111139.0;
         const dLon = (z.radius_m * Math.cos(angleRad)) / (111139.0 * cosLat);
         anchorLngLat = [z.center[1] + dLon, z.center[0] + dLat];
-        anchorPos = 'bottom';
-        offset = [0, -4];
+        anchorPos = cfg.anchor;
+        offset = cfg.offset;
       } else if (z.zone_type === 'SAFE_CORRIDOR' && z.waypoints?.length) {
         const mid = z.waypoints[Math.floor((z.waypoints.length - 1) / 2)];
         anchorLngLat = [mid[1], mid[0]];
@@ -347,6 +353,11 @@ export class TheatreMap implements OnDestroy {
       const existing = this.zoneLabels.get(z.id);
       if (existing) {
         existing.setLngLat(anchorLngLat);
+        existing.setOffset(offset);
+        const el = existing.getElement();
+        if (z.zone_type === 'PATROL') {
+          el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
+        }
         continue;
       }
       const el = document.createElement('div');
@@ -418,7 +429,7 @@ export class TheatreMap implements OnDestroy {
         el.className = 'drone-marker';
         el.addEventListener('click', ev => {
           ev.stopPropagation();
-          this.store.openDetails(d.drone_id);
+          this.store.selectDrone(d.drone_id);
         });
         marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([d.longitude, d.latitude]).addTo(map);
         this.droneMarkers.set(d.drone_id, marker);

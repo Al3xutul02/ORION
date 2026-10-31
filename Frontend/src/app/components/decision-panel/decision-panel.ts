@@ -35,7 +35,7 @@ export class DecisionPanel {
   protected patrolZones = computed(() => this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL'));
   protected selectedPatrolZoneId = signal<number | null>(null);
   protected pickedLoiterPoint = computed(() => this.store.pickedLoiterPoint());
-  protected commandScope = signal<'drone' | 'zone'>('drone');
+  protected commandScope = this.store.commandScope;
   protected activeZoneId = signal<number | null>(null);
   protected activeZone = computed(() => {
     const pzs = this.patrolZones();
@@ -44,8 +44,10 @@ export class DecisionPanel {
   });
   protected executingTactic = signal<string | null>(null);
 
+
+
   protected setCommandScope(scope: 'drone' | 'zone'): void {
-    this.commandScope.set(scope);
+    this.store.setCommandScope(scope);
     this.confirming.set(null);
     this.executingTactic.set(null);
   }
@@ -101,10 +103,13 @@ export class DecisionPanel {
   }
 
   constructor() {
-    // Switching drones cancels a half-finished confirmation.
+    // Switching drones cancels a half-finished confirmation and displays the commands tab.
     effect(() => {
-      this.store.selectedDroneId();
+      const id = this.store.selectedDroneId();
       this.confirming.set(null);
+      if (id !== null) {
+        this.activeTab.set('commands');
+      }
     });
   }
 
@@ -130,27 +135,32 @@ export class DecisionPanel {
   }
 
   protected eventLabel(event: string): string {
-    switch (event) {
-      case 'SENSORS_RECALIBRATED_SAFE':
-        return 'Recalibrated';
-      case 'SPOOFING_ATTACK_DETECTED':
-        return 'GPS Spoofed';
-      case 'TRUST_DEGRADED_EW_HAZARD':
-        return 'EW Hazard';
-      case 'TRUST_DEGRADED_NO_CORRIDOR':
-        return 'Hazard Area';
-      case 'WEATHER_LIMIT_EXCEEDED':
-        return 'Severe Weather';
-      case 'PATROL_ZONE_JAMMED':
-        return 'EW Jammed';
-      default:
-        return event.replaceAll('_', ' ');
+    const ev = (event || '').toUpperCase();
+    if (ev.includes('RECALIBRAT') || ev.includes('SAFE')) {
+      return 'Recalibrated';
     }
+    if (ev.includes('SPOOF')) {
+      return 'GPS Spoofed';
+    }
+    if (ev.includes('PATROL_ZONE_JAMMED') || ev.includes('JAMMED')) {
+      return 'EW Jammed';
+    }
+    if (ev.includes('EW_HAZARD') || ev.includes('HAZARD')) {
+      return 'EW Hazard';
+    }
+    if (ev.includes('NO_CORRIDOR')) {
+      return 'Hazard Area';
+    }
+    if (ev.includes('WEATHER')) {
+      return 'Severe Weather';
+    }
+    return event ? event.replaceAll('_', ' ') : 'Alert';
   }
 
   protected eventLevel(event: string): 'green' | 'yellow' | 'red' {
-    if (event.includes('SAFE')) return 'green';
-    if (event.includes('SPOOF') || event.includes('WEATHER')) return 'yellow';
+    const ev = (event || '').toUpperCase();
+    if (ev.includes('SAFE') || ev.includes('RECALIBRAT')) return 'green';
+    if (ev.includes('SPOOF') || ev.includes('WEATHER')) return 'yellow';
     return 'red';
   }
 

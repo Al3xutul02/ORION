@@ -291,6 +291,45 @@ class OrionFleetSimulator:
             reason=rec.get("reason")
         )
 
+    def apply_zone_tactic(self, db, zone_id: int, tactic: str, operator_id: str = "OPERATOR_1") -> Dict[str, Any]:
+        res = theatre_rules.apply_patrol_tactic(zone_id, tactic)
+        if res.get("status") == "ERROR":
+            return res
+        pz = theatre_rules.get_zone(zone_id)
+        tactic_upper = tactic.upper()
+        zone_drones = [d for d in self.drones.values() if d.get("patrol_zone_id") == zone_id]
+        if not zone_drones and zone_id == 100:
+            zone_drones = list(self.drones.values())
+
+        if tactic_upper == "SECTOR_ORBIT_SHIFT":
+            for d in zone_drones:
+                d["jammed"] = False
+                d["spoofed"] = False
+                d["on_orbit"] = False
+                if d.get("mode") in ("LOITER", "GUIDED"):
+                    d["mode"] = "PATROL"
+        elif tactic_upper in ("TIGHT_MESH", "WIDE_RECON"):
+            for d in zone_drones:
+                d["on_orbit"] = False
+                if d.get("mode") in ("LOITER", "GUIDED"):
+                    d["mode"] = "PATROL"
+        elif tactic_upper == "RESYNC_EQUIDISTANT":
+            if zone_drones:
+                step_angle = (2.0 * math.pi) / len(zone_drones)
+                base_angle = zone_drones[0].get("offset_angle", 0.0)
+                for idx, d in enumerate(zone_drones):
+                    d["offset_angle"] = (base_angle + idx * step_angle) % (2.0 * math.pi)
+                    d["patrol_rate"] = PATROL_ANGULAR_SPEED
+                    d["on_orbit"] = False
+                    if d.get("mode") in ("LOITER", "GUIDED"):
+                        d["mode"] = "PATROL"
+        elif tactic_upper == "EGRESS_CORRIDOR":
+            for did, d in self.drones.items():
+                if d.get("patrol_zone_id") == zone_id or (zone_id == 100 and d.get("patrol_zone_id") is None):
+                    if d.get("mode") in ("PATROL", "LOITER"):
+                        self.execute_drone_action(db, did, "SAFE_CORRIDOR_RETREAT", operator_id=operator_id)
+        return res
+
     def execute_drone_action(self, drone_id: int, action: str, target_zone_id: Optional[int] = None, target_point: Optional[List[float]] = None, path_type: str = "SAFE"):
         """Transitions a drone's flight state when the operator approves a recommendation or commands a drone."""
         if drone_id not in self.drones:
@@ -372,18 +411,7 @@ class OrionFleetSimulator:
 
         elif action in ("SECTOR_ORBIT_SHIFT", "TIGHT_MESH", "WIDE_RECON", "RESYNC_EQUIDISTANT", "EGRESS_CORRIDOR"):
             zid = target_zone_id or d.get("patrol_zone_id", 100)
-            theatre_rules.apply_patrol_tactic(zid, action)
-            for did, dr in self.drones.items():
-                if dr.get("patrol_zone_id") == zid:
-                    dr["jammed"] = False
-                    dr["spoofed"] = False
-                    if action == "EGRESS_CORRIDOR":
-                        dr["mode"] = "CORRIDOR"
-                        best_corr, _ = theatre_rules.find_best_corridor(dr["lat"], dr["lon"])
-                        corridors = theatre_rules.active_corridors()
-                        chosen = best_corr or (corridors[0] if corridors else None)
-                        dr["egress_waypoints"] = list(reversed(chosen["waypoints"])) if chosen else [[base_lat, base_lon]]
-
+            self.apply_zone_tactic(db, zid, action, operator_id=operator_id)
         elif action == "CONTINUE_PATROL":
             pz = theatre_rules.get_zone(d.get("patrol_zone_id", 100))
             if not pz:
@@ -870,8 +898,9 @@ class OrionFleetSimulator:
         c_lon = pz["center"][1] if pz else self.sector_center["lon"]
         r_m = pz["radius_m"] if pz else 350.0
         if pz and pz.get("id") == 100:
-            patrol_radius_lat = PATROL_RADIUS_LAT
-            patrol_radius_lon = PATROL_RADIUS_LON
+            scale = (pz.get("radius_m") or 350.0) / 350.0
+            patrol_radius_lat = PATROL_RADIUS_LAT * scale
+            patrol_radius_lon = PATROL_RADIUS_LON * scale
         else:
             patrol_radius_lat = r_m / 111139.0
             patrol_radius_lon = r_m / (111139.0 * math.cos(math.radians(c_lat)))
