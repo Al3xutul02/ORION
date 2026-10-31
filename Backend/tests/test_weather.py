@@ -79,7 +79,12 @@ def test_drone_in_storm_gets_one_alert_and_a_recommendation(monkeypatch):
     monkeypatch.setitem(d, "lon", START[1])
     monkeypatch.setitem(d, "mode", "PATROL")
     monkeypatch.setitem(d, "weather_alert", None)
+    monkeypatch.setitem(d, "spoofed", False)
+    monkeypatch.setitem(d, "jammed", False)
+    monkeypatch.setitem(d, "spoof_offset", (0.0, 0.0))
     with SessionLocal() as db:
+        db.query(ActionRecommendation).filter(ActionRecommendation.drone_id == 1, ActionRecommendation.status == "PENDING").delete()
+        db.commit()
         before = db.query(AuditLog).filter(AuditLog.event_type == "WEATHER_LIMIT_EXCEEDED").count()
         simulator._check_weather_limits(db, 1, d, storm)
         simulator._check_weather_limits(db, 1, d, storm)  # same cell: no second alert
