@@ -50,6 +50,26 @@
         }
       </div>
     }
+    <button
+      class="btn ptt"
+      type="button"
+      [class.rec]="store.radio() === 'recording'"
+      [class.busy]="store.radio() === 'transcribing'"
+      (pointerdown)="$event.preventDefault(); store.pttDown()"
+      (pointerup)="store.pttUp()"
+      (pointerleave)="store.pttUp()"
+      (pointercancel)="store.pttUp()"
+      (contextmenu)="$event.preventDefault()"
+      title="Push-to-talk: hold (or hold Space) and speak. The transcript goes into the after-action log."
+      [attr.aria-label]="'Push to talk'"
+      [attr.aria-pressed]="store.radio() === 'recording'"
+    >
+      @switch (store.radio()) {
+        @case ('recording') { <span class="dot"></span> REC 0:{{ store.radioSeconds().toString().padStart(2, '0') }} }
+        @case ('transcribing') { Transcribing… }
+        @default { &#127897; PTT }
+      }
+    </button>
     <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
       {{ store.muted() ? '&#128263;' : '&#128266;' }}
     </button>

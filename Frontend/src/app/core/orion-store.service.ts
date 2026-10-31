@@ -112,6 +112,9 @@ export class OrionStore implements OnDestroy {
   readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
   readonly training = signal<TrainingSession | null>(null);
+  /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
+  readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
+  readonly radioSeconds = signal(0);
   readonly commandScope = signal<'drone' | 'zone'>('drone');
 
   setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
@@ -739,6 +742,97 @@ export class OrionStore implements OnDestroy {
     }
   }
 
+  // ---- radio log (push-to-talk) ------------------------------------------------------------
+
+  private recorder: MediaRecorder | null = null;
+  private recStartedAt = 0;
+  private recTimer: ReturnType<typeof setInterval> | null = null;
+  private pttReleased = false;
+
+  /** Mic keyed (button pressed or Space held): start recording one transmission. */
+  async pttDown(): Promise<void> {
+    if (this.radio() !== 'idle') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      this.pushToast('warn', 'Radio unavailable', 'This browser cannot record from the microphone.');
+      return;
+    }
+    this.radio.set('recording');
+    this.radioSeconds.set(0);
+    this.pttReleased = false;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch {
+      this.radio.set('idle');
+      this.pushToast('warn', 'Microphone blocked', 'Allow microphone access for this page to use push-to-talk.');
+      return;
+    }
+    const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) ?? '';
+    const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    const startedIso = new Date().toISOString();
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop()); // mic indicator off between transmissions
+      const duration = (performance.now() - this.recStartedAt) / 1000;
+      void this.sendTransmission(new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' }), duration, startedIso);
+    };
+    this.recorder = recorder;
+    this.recStartedAt = performance.now();
+    recorder.start();
+    this.recTimer = setInterval(() => {
+      const t = (performance.now() - this.recStartedAt) / 1000;
+      this.radioSeconds.set(Math.floor(t));
+      if (t >= 60) this.pttUp(); // a stuck key shouldn't record forever
+    }, 250);
+    if (this.pttReleased) this.pttUp(); // released while the permission prompt was open
+  }
+
+  /** Mic released: stop recording and send the transmission for transcription. */
+  pttUp(): void {
+    this.pttReleased = true;
+    if (this.radio() !== 'recording' || !this.recorder) return;
+    if (this.recTimer) clearInterval(this.recTimer);
+    this.recTimer = null;
+    const r = this.recorder;
+    this.recorder = null;
+    if (r.state !== 'inactive') r.stop();
+  }
+
+  private async sendTransmission(blob: Blob, durationS: number, startedIso: string): Promise<void> {
+    if (durationS < 0.6 || blob.size < 500) {
+      this.radio.set('idle');
+      this.pushToast('info', 'Transmission too short', 'Hold the button (or Space) while you talk.');
+      return;
+    }
+    this.radio.set('transcribing');
+    const sim = this.offline;
+    const startElapsed = this.elapsed() - durationS;
+    try {
+      const res = await this.api.radioTransmit({
+        audio_base64: await blobToBase64(blob), mime_type: blob.type, duration_s: Math.round(durationS * 10) / 10,
+        operator_id: ORION_CONFIG.operatorId, started_at: startedIso, log: !sim,
+      });
+      if (!res.transcript) {
+        this.pushToast('info', 'Nothing understood', 'No speech was recognised in that transmission.');
+      } else {
+        if (sim && sim === this.offline) {
+          sim.logRadio(res.transcript, ORION_CONFIG.operatorId, {
+            duration_s: Math.round(durationS * 10) / 10, language: res.language, started_at: startedIso,
+            transcribed_by: res.model, mission_time_s: Math.max(0, Math.round(startElapsed * 10) / 10),
+          });
+        } else if (!sim) {
+          this.pollLive();
+        }
+        this.pushToast('ok', 'Radio logged', `„${res.transcript}”`);
+      }
+    } catch (err) {
+      this.pushToast('warn', 'Transcription failed', radioError(err));
+    } finally {
+      this.radio.set('idle');
+    }
+  }
+
   clearCopilot(): void {
     this.copilot.set([]);
     this.highlightedEvents.set([]);
@@ -891,7 +985,25 @@ export function summarise(e: AuditEvent): string {
   const d = parseDetails(e);
   const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : undefined);
   const drone = e.drone_id ? `Drone ${e.drone_id}: ` : '';
+  const said = pick('transcript');
+  if (said) return drone + `„${said}”` + (d['simulated'] ? ' (simulated)' : '');
   return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('assessment') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function radioError(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    if (err.status === 0) return `Transcription runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}.`;
+    if (typeof err.error?.detail === 'string') return err.error.detail;
+    return `Radio error (${err.status}).`;
+  }
+  return 'The transcript did not come back in time.';
 }
 
 function copilotError(err: unknown): string {

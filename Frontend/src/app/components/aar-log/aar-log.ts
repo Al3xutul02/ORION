@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AuditEvent } from '../../core/models';
 import { OrionStore, summarise } from '../../core/orion-store.service';
 
-const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
+const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info' | 'radio'> = {
   SPOOFING_ATTACK_INITIATED: 'critical',
   COMMAND_REPLAY_REJECTED: 'critical',
   COMMAND_AUTH_FAILED: 'critical',
@@ -32,6 +32,7 @@ const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
   GPS_RESTORED: 'ok',
   COMMAND_LINK_RESTORED: 'ok',
   PATROL_REBALANCED: 'info',
+  RADIO_TRANSMISSION: 'radio',
 };
 
 @Component({

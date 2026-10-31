@@ -39,6 +39,8 @@
   &.sev-warn { --sev: var(--yellow); }
   &.sev-ok { --sev: var(--green); }
   &.sev-info { --sev: var(--accent-dim); }
+  &.sev-radio { --sev: var(--violet); }
+  &.sev-radio .text { font-style: italic; }
 
   &.broken {
     background: var(--red-bg);

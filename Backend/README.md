@@ -108,6 +108,12 @@ Toate cele 14 teste verifică:
 - Model: `COPILOT_MODEL` (implicit `gemini-3.8-flash`); dacă e supraîncărcat (503/504), răspunde `COPILOT_FALLBACK_MODEL` (implicit `gemini-3.5-flash-lite`), nivel de gândire: `COPILOT_EFFORT` (`low` / `medium` / `high`, implicit `low`, pentru răspunsuri rapide).
 - În modul Offline, frontend-ul trimite propriul jurnal din browser (`events`) și rezultatul verificării lanțului (`chain_valid`).
 
+### 🎙 Jurnal radio transcris automat
+
+- `POST /api/v1/radio/transmissions` (audio base64, max ~60 s): Gemini (`RADIO_TRANSCRIBE_MODEL`, implicit `gemini-3.5-flash-lite`) transcrie cuvânt cu cuvânt; în Live transmisia intră în jurnalul AAR cu lanț de hash ca `RADIO_TRANSMISSION` (text, vorbitor, ora apăsării pe stație). Audio-ul nu e salvat. În Demo (`log: false`) doar transcrie, iar browserul scrie în propriul jurnal.
+- Copilotul citează transcrierile alături de evenimentele sistemului din același minut („ce s-a discutat când a apărut bruiajul?”).
+- Scrierile în jurnal sunt serializate (`aar_service._append_lock`): înainte, o aprobare și simulatorul care scriau în aceeași clipă puteau lega două înregistrări de același hash anterior și rupeau lanțul.
+
 ### 🎯 Antrenament cu AI ca adversar (modul Demo)
 
 Butonul **AI training** din Demo pornește o sesiune de 3 minute fără scriptul fix: un adversar alege atacurile simulate.

@@ -142,6 +142,17 @@ export class OrionApi {
     );
   }
 
+  /** One push-to-talk transmission: transcribed by Gemini; logged server-side when `log` (Live). */
+  radioTransmit(body: {
+    audio_base64: string; mime_type: string; duration_s: number; operator_id: string; started_at: string; log: boolean;
+  }) {
+    return firstValueFrom(
+      this.http.post<{ transcript: string; language: string; model: string; logged: boolean; event_id: number | null }>(
+        `${this.base}/radio/transmissions`, body,
+      ).pipe(timeout(30000)),
+    );
+  }
+
   simulationStatus() {
     return firstValueFrom(
       this.http.get<{ is_running: boolean; elapsed_time: number; milestones: Record<string, boolean> }>(`${this.base}/simulation/status`),

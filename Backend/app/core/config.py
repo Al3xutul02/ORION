@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     COPILOT_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
     # AI training adversary (services/training_service.py): picks a move every ~20 s, so speed wins.
     TRAINING_ADVERSARY_MODEL: str = "gemini-3.5-flash-lite"
+    # Radio log (services/radio_service.py): push-to-talk transcription, should take seconds.
+    RADIO_TRANSCRIBE_MODEL: str = "gemini-3.5-flash-lite"
     COPILOT_EFFORT: str = "low"  # thinking level: low | medium | high; low keeps chat answers quick
 
 
