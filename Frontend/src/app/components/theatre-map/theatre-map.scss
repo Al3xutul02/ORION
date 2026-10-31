@@ -45,6 +45,7 @@
   &.corridor { border-color: var(--zone-corridor); background: rgba(61, 220, 132, 0.25); }
   &.interference { border-color: var(--zone-interference); background: rgba(255, 159, 67, 0.2); }
   &.threat { border-color: var(--zone-threat); background: rgba(255, 84, 99, 0.2); }
+  &.weather { border-color: var(--violet); background: rgba(180, 140, 255, 0.2); }
 }
 
 .ring {
@@ -57,6 +58,10 @@
 .path {
   width: 14px;
   border-top: 2px dashed var(--red);
+
+  &.route {
+    border-top-color: var(--accent);
+  }
 }
 
 .overlay-tr {
@@ -172,6 +177,11 @@
     &.zone-SAFE_CORRIDOR { color: var(--zone-corridor); }
     &.zone-INTERFERENCE { color: var(--zone-interference); }
     &.zone-THREAT { color: var(--zone-threat); }
+    &.zone-WEATHER { color: var(--violet); }
+
+    &.zone-WEATHER em {
+      color: var(--violet);
+    }
   }
 }
 

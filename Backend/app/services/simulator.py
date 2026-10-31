@@ -6,8 +6,9 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
 from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
-from app.services.theatre_rules import theatre_rules
+from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
+from app.services import weather
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
 from app.models.recommendation import ActionRecommendation
@@ -114,7 +115,7 @@ class OrionFleetSimulator:
         mode = d_data["mode"]
         rep_lat, rep_lon = self._reported_position(d_data)
         flight_mode = "GUIDED" if mode == "PATROL" else mode
-        speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL") else d_data.get("speed", 12.0))
+        speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL", "ROUTE") else d_data.get("speed", 12.0))
 
         fix_type = 3
         sats = 12
@@ -134,6 +135,19 @@ class OrionFleetSimulator:
             drop_rate = 35.0
             rssi = 25.0
 
+        wx = d_data.get("weather_now")
+        if wx:
+            wx_fx = weather.effects(wx)
+            drop_rate = round(drop_rate + wx_fx["drop_add"], 1)
+            rssi = round(max(0.0, rssi - wx_fx["rssi_loss"]), 1)
+            eph = round(eph + wx_fx["eph_add"], 2)
+
+        battery_val = d_data.get("battery_used")
+        if battery_val is None:
+            battery_remaining = max(20.0, 100.0 - ((self.elapsed_time * 0.08) % 80.0))
+        else:
+            battery_remaining = max(20.0, round(100.0 - battery_val, 1))
+
         return {
             "drone_id": drone_id,
             "latitude": rep_lat,
@@ -144,7 +158,7 @@ class OrionFleetSimulator:
             "fix_type": fix_type,
             "satellites_visible": sats,
             "eph": eph,
-            "battery_remaining": max(20.0, 100.0 - ((self.elapsed_time * 0.08) % 80.0)),
+            "battery_remaining": battery_remaining,
             "drop_rate_comm": drop_rate,
             "rssi": rssi,
             "noise": 15.0,
@@ -218,8 +232,8 @@ class OrionFleetSimulator:
         d = self.drones[drone_id]
         # Theatre rules run on the GCS, so they only know the reported position.
         rep_lat, rep_lon = self._reported_position(d)
-        is_degraded = d["spoofed"] or d["jammed"]
-        current_trust = 28.0 if is_degraded else 95.0
+        is_recalibration = reason == "Sensors recalibrated in safe airspace"
+        current_trust = 95.0 if is_recalibration else 28.0
         rec = theatre_rules.evaluate_tactical_recommendation(
             drone_id=drone_id,
             drone_lat=rep_lat,
@@ -278,6 +292,15 @@ class OrionFleetSimulator:
                 d["loiter_until"] = self.elapsed_time + 6.0
             else:
                 d["mode"] = "CORRIDOR"
+        elif action == "SAFE_ROUTE_RETREAT":
+            route = theatre_rules.plan_safe_route(d["lat"], d["lon"])
+            if route:
+                d["mode"] = "ROUTE"
+                d["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d["mode"] = "LOITER"
+                d["loiter_until"] = float("inf")
+                d["egress_waypoints"] = []
         elif action == "CONTINUE_PATROL":
             d["offset_angle"] = math.atan2(
                 (d["lat"] - self.sector_center["lat"]) / 0.003,
@@ -470,10 +493,61 @@ class OrionFleetSimulator:
         )
         return {"event": "DANGER_DISAPPEARED", "zone": cleared}
 
+    def trigger_weather_appear(self, db, kind: Optional[str] = None) -> Dict[str, Any]:
+        zone = theatre_rules.spawn_weather_zone(kind)
+        aar_service.log_event(
+            db=db,
+            event_type="WEATHER_CELL_DETECTED",
+            drone_id=None,
+            details={
+                "zone": zone["name"],
+                "description": f"{zone['name']} entering the theatre: {weather.describe(zone)}",
+                "blocks_flight": weather.is_severe(zone),
+                "mission_time_s": self.elapsed_time
+            },
+            operator_id="MET_SERVICE"
+        )
+        return {"event": "WEATHER_APPEARED", "zone": zone}
+
+    def trigger_weather_clear(self, db) -> Dict[str, Any]:
+        zone = theatre_rules.clear_weather_zone()
+        if zone:
+            aar_service.log_event(
+                db=db,
+                event_type="WEATHER_CLEARED",
+                drone_id=None,
+                details={"zone": zone["name"], "description": f"{zone['name']} has dissipated", "mission_time_s": self.elapsed_time},
+                operator_id="MET_SERVICE"
+            )
+        return {"event": "WEATHER_CLEARED", "zone": zone}
+
+    def _check_weather_limits(self, db, d_id: int, d_data: Dict[str, Any], zone: Optional[Dict[str, Any]]):
+        """Weather beyond the platform's limits: alert once per entry and recommend leaving."""
+        if not zone or not weather.is_severe(zone) or d_data["mode"] in ("LANDED", "RTL", "CORRIDOR", "ROUTE"):
+            if not zone or not weather.is_severe(zone):
+                d_data["weather_alert"] = None
+            return
+        if d_data.get("weather_alert") == zone["id"]:
+            return
+        d_data["weather_alert"] = zone["id"]
+        aar_service.log_event(
+            db=db,
+            event_type="WEATHER_LIMIT_EXCEEDED",
+            drone_id=d_id,
+            details={
+                "zone": zone["name"],
+                "reason": f"{zone['name']}: {weather.describe(zone)}. Leave the cell",
+                "mission_time_s": self.elapsed_time
+            },
+            operator_id="ORION_THEATRE_RULES"
+        )
+        self._issue_recommendation_for_drone(db, d_id, f"Inside {zone['name']} beyond wind limit")
+
     def trigger_random_event(self, db) -> Dict[str, Any]:
         """Selects and fires a contextually appropriate random battlefield event."""
         active_corridors = len(theatre_rules.active_corridors())
         active_dangers = len(theatre_rules.active_danger_zones())
+        active_weather = len(theatre_rules.active_weather_zones())
 
         weights: List[Tuple[str, float]] = [
             ("spoofing", 1.4),
@@ -483,6 +557,8 @@ class OrionFleetSimulator:
             ("corridor_appear", 1.4 if active_corridors < 2 else 0.8),
             ("corridor_disappear", 1.1 if active_corridors >= 2 else 0.4),
             ("replay", 0.9),
+            ("weather_appear", 0.8 if active_weather < 2 else 0.1),
+            ("weather_clear", 0.7 if active_weather >= 1 else 0.0),
         ]
         # Avoid repeating the exact same event type twice in a row
         filtered = [(k, w) for k, w in weights if k != self._last_event_kind]
@@ -503,6 +579,10 @@ class OrionFleetSimulator:
             return self.trigger_danger_appear(db)
         elif chosen == "danger_disappear":
             return self.trigger_danger_disappear(db)
+        elif chosen == "weather_appear":
+            return self.trigger_weather_appear(db)
+        elif chosen == "weather_clear":
+            return self.trigger_weather_clear(db)
         else:
             return self.trigger_replay_attack(db)
 
@@ -523,7 +603,29 @@ class OrionFleetSimulator:
                 d_data["mode"] = "CORRIDOR"
             return
 
-        if mode in ("CORRIDOR", "RTL"):
+        if mode == "ROUTE" and d_data["egress_waypoints"] and self._route_leg_blocked(d_data):
+            # A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
+            route = theatre_rules.plan_safe_route(d_data["lat"], d_data["lon"])
+            if route:
+                d_data["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d_data["mode"] = "LOITER"
+                d_data["loiter_until"] = float("inf")
+                d_data["egress_waypoints"] = []
+            aar_service.log_event(
+                db=db,
+                event_type="ROUTE_REPLANNED",
+                drone_id=d_id,
+                details={
+                    "reason": "A hazard zone now crosses the planned route",
+                    "result": f"{len(route['waypoints']) - 1} legs, {route['length_m'] / 1000:.1f} km" if route else "No safe route: holding (LOITER)",
+                    "mission_time_s": self.elapsed_time
+                },
+                operator_id="ORION_PATHFINDER"
+            )
+            return
+
+        if mode in ("CORRIDOR", "RTL", "ROUTE"):
             wps = d_data["egress_waypoints"]
             if not wps:
                 d_data["mode"] = "PATROL"
@@ -553,7 +655,7 @@ class OrionFleetSimulator:
                         drone_id=d_id,
                         details={
                             "location": "Base Forward Alpha",
-                            "via": "Direct Return-to-Home" if mode == "RTL" else "Safe Corridor Egress",
+                            "via": {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress"),
                             "mission_time_s": self.elapsed_time
                         },
                         operator_id="SYSTEM"
@@ -589,6 +691,20 @@ class OrionFleetSimulator:
             d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
 
+    def _route_leg_blocked(self, d_data: Dict[str, Any]) -> bool:
+        """True when the leg the drone is flying now crosses a hazard it isn't already inside."""
+        lat, lon = d_data["lat"], d_data["lon"]
+        t_lat, t_lon = d_data["egress_waypoints"][0]
+        for z in theatre_rules.active_danger_zones():
+            if z.get("geometry_type") != "CIRCLE":
+                continue
+            c_lat, c_lon = z["center"]
+            if haversine_distance_m(lat, lon, c_lat, c_lon) <= z["radius_m"]:
+                continue
+            if line_segment_intersects_circle(lat, lon, t_lat, t_lon, c_lat, c_lon, z["radius_m"]):
+                return True
+        return False
+
     def _update_drone_recalibration(self, db, d_id: int, d_data: Dict[str, Any], dt: float):
         """
         Checks whether a drone is inside an active hazard zone or in clean airspace.
@@ -620,15 +736,18 @@ class OrionFleetSimulator:
 
         # Drone is degraded (spoofed or jammed) AND outside all hazard zones.
         # Recalibrate faster (3.5s) when actively stabilizing in LOITER/CORRIDOR/RTL, or 6s in PATROL.
-        recal_threshold = 3.5 if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL") else 6.0
+        recal_threshold = 3.5 if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL", "ROUTE") else 6.0
         d_data["safe_airspace_time"] = d_data.get("safe_airspace_time", 0.0) + dt
 
         if d_data["safe_airspace_time"] >= recal_threshold:
             was_spoofed = d_data["spoofed"]
             if was_spoofed:
                 # The EKF rejects the false fix: the reported position snaps back onto the true
-                # airframe position ("lat"/"lon" never moved). Re-plan the corridor from there.
-                if d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
+                # airframe position ("lat"/"lon" never moved). Re-plan the route/corridor from there.
+                if d_data["egress_waypoints"] and d_data["mode"] == "ROUTE":
+                    route = theatre_rules.plan_safe_route(d_data["lat"], d_data["lon"])
+                    d_data["egress_waypoints"] = [list(pt) for pt in route["waypoints"][1:]] if route else []
+                elif d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
                     best_corr, _ = theatre_rules.find_best_corridor(d_data["lat"], d_data["lon"])
                     corridors = theatre_rules.active_corridors()
                     chosen = best_corr or (corridors[0] if corridors else None)
@@ -671,7 +790,7 @@ class OrionFleetSimulator:
                 db.commit()
 
             # Recommend resuming patrol if holding in loiter/corridor/rtl in safe airspace
-            if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL"):
+            if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL", "ROUTE"):
                 self._issue_recommendation_for_drone(db, d_id, "Sensors recalibrated in safe airspace")
 
     async def _run_loop(self):
@@ -696,9 +815,24 @@ class OrionFleetSimulator:
                 drone_states: List[Dict[str, Any]] = []
                 dt = 1.0 / self.tick_rate_hz
 
+                for gone in theatre_rules.drift_weather(dt):
+                    aar_service.log_event(
+                        db=db,
+                        event_type="WEATHER_CLEARED",
+                        drone_id=None,
+                        details={"zone": gone["name"], "description": f"{gone['name']} drifted out of the theatre", "mission_time_s": self.elapsed_time},
+                        operator_id="MET_SERVICE"
+                    )
+
                 for d_id, d_data in self.drones.items():
                     self._move_drone(db, d_id, d_data, dt)
                     self._update_drone_recalibration(db, d_id, d_data, dt)
+                    wx = weather.weather_at(theatre_rules.active_weather_zones(), d_data["lat"], d_data["lon"], haversine_distance_m)
+                    d_data["weather_now"] = wx
+                    self._check_weather_limits(db, d_id, d_data, wx)
+                    wx_fx = weather.effects(wx)
+                    if d_data["mode"] != "LANDED":
+                        d_data["battery_used"] = (d_data.get("battery_used", 0.0) + 0.08 * dt * wx_fx["battery_mult"]) % 80.0
                     fleet_telemetry.append(self.get_telemetry(d_id))
 
                 # Run trust evaluator across fleet using perceived telemetry only
@@ -711,6 +845,11 @@ class OrionFleetSimulator:
                         command_valid=True
                     )
 
+                    wx = self.drones[d_id].get("weather_now")
+                    if wx:
+                        note = f"Weather: {wx['name']} ({weather.describe(wx)}), link/battery effects are weather, not EW"
+                        nominal = score_breakdown.reason == "Sensors & consensus nominal"
+                        score_breakdown.reason = note if nominal else f"{score_breakdown.reason}; {note}"
                     state_dict = {
                         **telem,
                         "trust_score": score_breakdown.trust_score,

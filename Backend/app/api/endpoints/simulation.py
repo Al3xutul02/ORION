@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.simulator import simulator
@@ -78,6 +80,22 @@ def trigger_danger_disappear_scenario(db: Session = Depends(get_db)):
     """Clears an active danger zone from the theatre."""
     res = simulator.trigger_danger_disappear(db)
     return {**res, "status": "danger_zone_cleared"}
+
+
+@router.post("/trigger-weather-appear")
+def trigger_weather_appear_scenario(kind: Optional[str] = None, db: Session = Depends(get_db)):
+    """Brings a weather cell into the theatre: kind = STORM, RAIN or WIND (random if omitted)."""
+    if kind is not None and kind.upper() not in ("STORM", "RAIN", "WIND"):
+        raise HTTPException(status_code=400, detail="kind must be STORM, RAIN or WIND")
+    res = simulator.trigger_weather_appear(db, kind.upper() if kind else None)
+    return {**res, "status": "weather_detected"}
+
+
+@router.post("/trigger-weather-clear")
+def trigger_weather_clear_scenario(db: Session = Depends(get_db)):
+    """Dissipates the oldest active weather cell."""
+    res = simulator.trigger_weather_clear(db)
+    return {**res, "status": "weather_cleared"}
 
 
 @router.get("/status")

@@ -73,6 +73,11 @@
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Mobile jammer</button>
       <button class="btn sm" type="button" (click)="store.trigger('linkloss')">Link loss D5</button>
+      <span class="hint">Weather:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">− Weather</button>
     </div>
   } @else {
     <div class="live-banner">
@@ -90,6 +95,11 @@
       <button class="btn sm" type="button" (click)="store.trigger('danger-appear')" [disabled]="store.busy()" title="Spawn a new enemy danger zone in the theatre">+ Danger zone</button>
       <button class="btn sm" type="button" (click)="store.trigger('danger-disappear')" [disabled]="store.busy()" title="Neutralize/clear an active danger zone">− Danger zone</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
+      <span class="hint">Weather:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">− Weather</button>
     </div>
   }
 </div>

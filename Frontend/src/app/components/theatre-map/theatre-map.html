@@ -1,12 +1,16 @@
 <div class="map" #map></div>
 
+<app-drone-details />
+
 <div class="legend">
   <span><i class="sw base"></i>Base</span>
   <span><i class="sw corridor"></i>Safe corridor</span>
   <span><i class="sw interference"></i>Interference</span>
   <span><i class="sw threat"></i>Threat</span>
+  <span><i class="sw weather"></i>Weather</span>
   <span><i class="ring"></i>Uncertainty</span>
   <span><i class="path blocked"></i>RTL blocked</span>
+  <span><i class="path route"></i>A* route</span>
   @if (basemap() === 'real') {
     <span class="note">Exercise zones over a real map</span>
   }

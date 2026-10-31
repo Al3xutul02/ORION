@@ -3,6 +3,9 @@ import math
 import random
 from typing import List, Dict, Any, Optional, Tuple
 
+from app.services.pathfinder import plan_route
+from app.services import weather
+
 
 def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Returns great-circle distance in meters between two WGS84 coordinates."""
@@ -168,6 +171,19 @@ class TheatreRulesEngine:
 
     def active_danger_zones(self) -> List[Dict[str, Any]]:
         return [z for z in self.zones if z.get("is_active", True) and z.get("zone_type") in ("INTERFERENCE", "THREAT")]
+
+    def active_weather_zones(self) -> List[Dict[str, Any]]:
+        return [z for z in self.zones if z.get("is_active", True) and weather.is_weather(z)]
+
+    def blocking_zones(self) -> List[Dict[str, Any]]:
+        """Everything a drone must not fly through: EW / threat zones and weather beyond the platform's limits."""
+        return self.active_danger_zones() + [z for z in self.active_weather_zones() if weather.is_severe(z)]
+
+    @staticmethod
+    def _zone_label(zone: Dict[str, Any]) -> str:
+        if weather.is_weather(zone):
+            return f"{zone['name']} (WEATHER, {weather.describe(zone)})"
+        return f"{zone['name']} ({zone.get('zone_type')})"
 
     def _active_circles(self, ignore_id: Optional[int] = None) -> List[Dict[str, Any]]:
         return [
@@ -388,6 +404,58 @@ class TheatreRulesEngine:
         cleared["is_active"] = False
         return cleared
 
+    # ---- weather ---------------------------------------------------------------------------
+
+    # Weather drifts across this box and is cleared once it leaves.
+    WEATHER_BOUNDS = {"lat": (44.300, 44.365), "lon": (23.775, 23.875)}
+
+    def spawn_weather_zone(self, kind: Optional[str] = None) -> Dict[str, Any]:
+        """Adds a storm cell, rain band or wind corridor, drifting slowly across the theatre."""
+        if len(self.active_weather_zones()) >= 2:
+            self.active_weather_zones()[0]["is_active"] = False
+        templates = [t for t in weather.WEATHER_TEMPLATES if kind is None or t["weather"] == kind]
+        tpl = copy.deepcopy(random.choice(templates))
+        # Enter from the west and drift east-north-east at roughly 5 m/s.
+        lat = random.uniform(44.318, 44.345)
+        lon = random.uniform(23.800, 23.825)
+        speed_deg = 5.0 / 111139.0
+        heading = random.uniform(-0.35, 0.35)
+        zone = {
+            "id": self._alloc_id(),
+            "name": tpl["name"],
+            "zone_type": "WEATHER",
+            "geometry_type": "CIRCLE",
+            "center": [round(lat, 5), round(lon, 5)],
+            "radius_m": tpl["radius_m"],
+            "is_active": True,
+            "detected_by": "MET_SERVICE",
+            "weather": tpl["weather"],
+            "wind_ms": tpl["wind_ms"],
+            "rain": tpl["rain"],
+            "drift": [speed_deg * math.sin(heading), speed_deg * 1.4 * math.cos(heading)],
+        }
+        self.zones.append(zone)
+        return zone
+
+    def clear_weather_zone(self) -> Optional[Dict[str, Any]]:
+        zones = self.active_weather_zones()
+        if not zones:
+            return None
+        zones[0]["is_active"] = False
+        return zones[0]
+
+    def drift_weather(self, dt: float) -> List[Dict[str, Any]]:
+        """Moves every weather zone along its drift; returns the ones that just left the theatre."""
+        gone = []
+        (lat_min, lat_max), (lon_min, lon_max) = self.WEATHER_BOUNDS["lat"], self.WEATHER_BOUNDS["lon"]
+        for z in self.active_weather_zones():
+            dlat, dlon = z.get("drift", [0.0, 0.0])
+            z["center"] = [z["center"][0] + dlat * dt, z["center"][1] + dlon * dt]
+            if not (lat_min <= z["center"][0] <= lat_max and lon_min <= z["center"][1] <= lon_max):
+                z["is_active"] = False
+                gone.append(z)
+        return gone
+
     def is_path_safe_to_base(self, drone_lat: float, drone_lon: float) -> Tuple[bool, Optional[str]]:
         """
         Tests whether the direct line from (drone_lat, drone_lon) to Home Base
@@ -396,16 +464,15 @@ class TheatreRulesEngine:
         base_lat = self.home_base["lat"]
         base_lon = self.home_base["lon"]
 
-        for zone in self.zones:
-            if not zone.get("is_active", True):
-                continue
-
-            z_type = zone.get("zone_type")
-            if z_type in ("INTERFERENCE", "THREAT") and zone.get("geometry_type") == "CIRCLE":
+        for zone in self.blocking_zones():
+            if zone.get("geometry_type") == "CIRCLE":
                 c_lat, c_lon = zone["center"]
                 r_m = zone["radius_m"]
+                # A storm the drone is already in doesn't block flying home: that's the way out of it.
+                if weather.is_weather(zone) and haversine_distance_m(drone_lat, drone_lon, c_lat, c_lon) <= r_m:
+                    continue
                 if line_segment_intersects_circle(drone_lat, drone_lon, base_lat, base_lon, c_lat, c_lon, r_m):
-                    return False, f"Direct path crosses {zone['name']} ({z_type})"
+                    return False, f"Direct path crosses {self._zone_label(zone)}"
 
         return True, None
 
@@ -419,7 +486,7 @@ class TheatreRulesEngine:
         if not corridors:
             return None, "No active safe corridors available in theatre"
 
-        dangers = self.active_danger_zones()
+        dangers = self.blocking_zones()
         inside_ids = {
             z["id"] for z in dangers
             if z.get("geometry_type") == "CIRCLE"
@@ -451,6 +518,20 @@ class TheatreRulesEngine:
 
         return None, last_block_reason or "All safe corridors blocked by hazard zones"
 
+    def plan_safe_route(self, drone_lat: float, drone_lon: float) -> Optional[Dict[str, Any]]:
+        """A* route from the drone to Home Base around every active hazard zone (see pathfinder.py)."""
+        # Hard obstacles: EW, threats and weather beyond limits. Lighter weather is only avoided when cheap.
+        hazards = [
+            (z["center"][0], z["center"][1], z["radius_m"], z["name"])
+            for z in self.blocking_zones()
+            if z.get("geometry_type") == "CIRCLE"
+        ] + [
+            (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
+            for z in self.active_weather_zones()
+            if not weather.is_severe(z)
+        ]
+        return plan_route((drone_lat, drone_lon), (self.home_base["lat"], self.home_base["lon"]), hazards)
+
     def evaluate_tactical_recommendation(
         self,
         drone_id: int,
@@ -468,9 +549,9 @@ class TheatreRulesEngine:
         - If a diverted/loitering drone has recovered nominal trust in safe airspace: recommends CONTINUE_PATROL.
         """
         if trust_score >= 70.0:
-            if flight_mode in ("LOITER", "CORRIDOR", "RTL"):
+            if flight_mode in ("LOITER", "CORRIDOR", "RTL", "ROUTE"):
                 inside_hazard = False
-                for z in self.active_danger_zones():
+                for z in self.blocking_zones():
                     if z.get("geometry_type") == "CIRCLE" and z.get("center") and z.get("radius_m"):
                         if haversine_distance_m(drone_lat, drone_lon, z["center"][0], z["center"][1]) <= z["radius_m"]:
                             inside_hazard = True
@@ -516,6 +597,27 @@ class TheatreRulesEngine:
                         {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
                     ]
                 }
+            route = self.plan_safe_route(drone_lat, drone_lon)
+            if route:
+                legs = len(route["waypoints"]) - 1
+                return {
+                    "drone_id": drone_id,
+                    "trigger_event": "TRUST_DEGRADED_NO_CORRIDOR",
+                    "blocked_action": "RETURN_TO_HOME",
+                    "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
+                    "recommended_action": "SAFE_ROUTE_RETREAT",
+                    "recommendation_details": (
+                        f"1. Fly the computed safe route to Base: {legs} legs, "
+                        f"{route['length_m'] / 1000:.1f} km, keeping clear of every active hazard zone. "
+                        "2. Re-plan automatically if the zones change."
+                    ),
+                    "safe_waypoints": [
+                        {"lat": lat, "lon": lon, "alt": 120.0, "action": "WAYPOINT"}
+                        for lat, lon in route["waypoints"][1:-1]
+                    ] + [
+                        {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
+                    ]
+                }
             else:
                 return {
                     "drone_id": drone_id,
@@ -525,7 +627,7 @@ class TheatreRulesEngine:
                     "recommended_action": "LOITER",
                     "recommendation_details": (
                         "1. Hold position (LOITER) at current altitude to stabilize. "
-                        "2. Await new Safe Corridor clearance before retreating to Base."
+                        "2. No safe route exists right now: await a Safe Corridor or a change in the zones."
                     ),
                     "safe_waypoints": [
                         {"lat": drone_lat, "lon": drone_lon, "alt": 120.0, "action": "LOITER"}
