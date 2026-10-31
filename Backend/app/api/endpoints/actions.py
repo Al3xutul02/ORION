@@ -1,12 +1,24 @@
-from typing import List, Dict, Any
+from datetime import datetime, timezone
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.security import command_signer
 from app.models.recommendation import ActionRecommendation
 from app.schemas.command import RecommendationResponse, OperatorActionApproval
+from app.services.aar_service import aar_service
 from app.services.command_manager import command_manager
+from app.services.simulator import simulator
 
 router = APIRouter(prefix="/actions", tags=["Tactical Actions & Decisions"])
+
+
+class DirectDroneCommand(BaseModel):
+    drone_id: int
+    action: str
+    operator_id: str = "OPERATOR_1"
+    notes: Optional[str] = None
 
 
 @router.get("/recommendations", response_model=List[RecommendationResponse])
@@ -22,7 +34,8 @@ def get_recommendations(status: str = "ALL", db: Session = Depends(get_db)):
 def submit_operator_decision(payload: OperatorActionApproval, db: Session = Depends(get_db)):
     """
     Submits a human operator decision (APPROVE or REJECT) for a tactical recommendation.
-    On approval, signs the MAVLink 2 command cryptographically and logs to inviolable AAR.
+    On approval, signs the MAVLink 2 command cryptographically, executes the drone maneuver,
+    and logs to the inviolable AAR.
     """
     success, message, command_data = command_manager.handle_operator_decision(
         db=db,
@@ -34,8 +47,75 @@ def submit_operator_decision(payload: OperatorActionApproval, db: Session = Depe
     if not success:
         raise HTTPException(status_code=400, detail=message)
 
+    if command_data:
+        simulator.execute_drone_action(
+            drone_id=command_data["drone_id"],
+            action=command_data["command"]
+        )
+
     return {
         "status": "SUCCESS",
         "message": message,
         "signed_command": command_data
+    }
+
+
+@router.post("/command")
+def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_db)):
+    """
+    Signs and dispatches a direct operator command to a drone in Live mode,
+    superseding any pending recommendations for that drone.
+    """
+    if payload.drone_id not in simulator.drones:
+        raise HTTPException(status_code=404, detail=f"Drone {payload.drone_id} not found")
+
+    # Supersede pending recommendations for this drone
+    pending = (
+        db.query(ActionRecommendation)
+        .filter(ActionRecommendation.drone_id == payload.drone_id, ActionRecommendation.status == "PENDING")
+        .all()
+    )
+    for rec in pending:
+        rec.status = "SUPERSEDED"
+        rec.operator_id = payload.operator_id
+        rec.approved_at = datetime.now(timezone.utc)
+        aar_service.log_event(
+            db=db,
+            event_type="RECOMMENDATION_SUPERSEDED",
+            drone_id=payload.drone_id,
+            details={
+                "recommendation_id": rec.id,
+                "reason": f"Operator manually commanded {payload.action} instead"
+            },
+            operator_id=payload.operator_id
+        )
+    db.commit()
+
+    command_manager._command_sequence += 1
+    seq = command_manager._command_sequence
+    cmd_payload = command_signer.sign_command(
+        command_name=payload.action,
+        drone_id=payload.drone_id,
+        sequence=seq,
+        params={"origin": "MANUAL_OPERATOR_COMMAND", "notes": payload.notes or ""}
+    )
+
+    aar_service.log_event(
+        db=db,
+        event_type="OPERATOR_COMMAND",
+        drone_id=payload.drone_id,
+        details={
+            "action": payload.action,
+            "sequence": seq,
+            "signature": cmd_payload["signature"]
+        },
+        operator_id=payload.operator_id
+    )
+
+    simulator.execute_drone_action(drone_id=payload.drone_id, action=payload.action)
+
+    return {
+        "status": "COMMAND_SENT",
+        "message": f"Signed {payload.action} sent to Drone {payload.drone_id} (seq {seq}).",
+        "signed_command": cmd_payload
     }

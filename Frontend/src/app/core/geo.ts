@@ -60,13 +60,42 @@ export interface ActionOption {
   reason: string;
 }
 
-// flight_mode strings reported while each action runs (offline simulator; backend reports GUIDED).
 const ACTIVE_MODE: Record<ActionOption['id'], string> = {
   RETURN_TO_HOME: 'RTL',
   LOITER: 'LOITER',
   SAFE_CORRIDOR_RETREAT: 'CORRIDOR',
   CONTINUE_PATROL: 'GUIDED',
 };
+
+function corridorRoute(drone: DroneState, corridor: Zone): [number, number][] {
+  if (!corridor.waypoints?.length) return [];
+  const wps = [...corridor.waypoints].reverse();
+  return [[drone.longitude, drone.latitude], ...wps.map(([la, lo]) => [lo, la] as [number, number])];
+}
+
+function selectCorridor(drone: DroneState, zones: Zone[]): { corridor?: Zone; route: [number, number][]; blocking?: Zone } {
+  const corridors = zones.filter(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active && z.waypoints?.length);
+  if (!corridors.length) return { route: [] };
+
+  const insideHazard = zoneContaining(zones, drone.latitude, drone.longitude);
+  const hazards = hazardZones(zones);
+
+  let firstBlocking: Zone | undefined;
+  for (const c of corridors) {
+    const route = corridorRoute(drone, c);
+    const blk = hazards.find(z =>
+      z !== insideHazard &&
+      route.slice(1).some(([lon, lat], i) => {
+        const [pLon, pLat] = route[i];
+        return segmentIntersectsCircle(pLat, pLon, lat, lon, z.center![0], z.center![1], z.radius_m!);
+      }),
+    );
+    if (!blk) return { corridor: c, route };
+    firstBlocking ??= blk;
+  }
+
+  return { corridor: corridors[0], route: corridorRoute(drone, corridors[0]), blocking: firstBlocking };
+}
 
 /**
  * "Ce pot face acum în siguranță?" — the per-drone action matrix. Mirrors the backend
@@ -78,19 +107,9 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
   const blocking = hazardZones(zones).find(z =>
     segmentIntersectsCircle(drone.latitude, drone.longitude, base.lat, base.lon, z.center![0], z.center![1], z.radius_m!),
   );
-  const corridor = zones.find(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active);
   const degraded = drone.trust_status !== 'GREEN';
   const insideHazard = zoneContaining(zones, drone.latitude, drone.longitude);
-  // The corridor route must also stay clear of hazards (zones move now). A zone the drone is
-  // already inside doesn't count: leaving it is the point of retreating.
-  const route = egressPaths(drone, zones).viaCorridor;
-  const corridorBlocking = hazardZones(zones).find(z =>
-    z !== insideHazard &&
-    route.slice(1).some(([lon, lat], i) => {
-      const [pLon, pLat] = route[i];
-      return segmentIntersectsCircle(pLat, pLon, lat, lon, z.center![0], z.center![1], z.radius_m!);
-    }),
-  );
+  const { corridor, blocking: corridorBlocking } = selectCorridor(drone, zones);
   const corridorAllowed = !!corridor && !corridorBlocking;
 
   const rtlAllowed = !blocking;
@@ -115,7 +134,7 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
       allowed: corridorAllowed,
       recommended: degraded && !rtlAllowed && corridorAllowed,
       reason: !corridor
-        ? 'No safe corridor defined'
+        ? 'No safe corridor active in theatre'
         : corridorBlocking
           ? `Route to the corridor crosses ${corridorBlocking.name}`
           : 'Egress route avoids known hazard zones',
@@ -133,7 +152,6 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
     return options.map(o => ({ ...o, allowed: false, recommended: false, active: false, reason: 'Drone has landed at base' }));
   }
   const withActive = options.map(o => ({ ...o, active: drone.flight_mode === ACTIVE_MODE[o.id] }));
-  // Already doing something safe about the degradation: nothing further to recommend.
   const handled = withActive.some(o => o.active && o.allowed && o.id !== 'CONTINUE_PATROL');
   return handled ? withActive.map(o => ({ ...o, recommended: false })) : withActive;
 }
@@ -142,12 +160,6 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
 export function egressPaths(drone: DroneState, zones: Zone[]) {
   const base = ORION_CONFIG.homeBase;
   const direct: [number, number][] = [[drone.longitude, drone.latitude], [base.lon, base.lat]];
-  const corridor = zones.find(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active && z.waypoints?.length);
-  let viaCorridor: [number, number][] = [];
-  if (corridor?.waypoints) {
-    // Join the corridor at its far end (the end away from base) and follow it home.
-    const wps = [...corridor.waypoints].reverse();
-    viaCorridor = [[drone.longitude, drone.latitude], ...wps.map(([la, lo]) => [lo, la] as [number, number])];
-  }
+  const { route: viaCorridor } = selectCorridor(drone, zones);
   return { direct, viaCorridor };
 }

@@ -112,7 +112,7 @@ export class TheatreMap implements OnDestroy {
     this.map = map;
     // Keep the whole theatre in view when the panel resizes, until the operator pans or zooms.
     let userMoved = false;
-    map.on('movestart', e => { if ((e as { originalEvent?: Event }).originalEvent) userMoved = true; });
+    map.on('movestart', (e: { originalEvent?: Event }) => { if (e.originalEvent) userMoved = true; });
     this.resizeObserver = new ResizeObserver(() => {
       map.resize();
       if (!userMoved) map.fitBounds(THEATRE_BOUNDS, { padding: 40, duration: 0 });
@@ -269,6 +269,7 @@ export class TheatreMap implements OnDestroy {
       if (!marker) {
         const el = document.createElement('button');
         el.type = 'button';
+        el.className = 'drone-marker';
         el.addEventListener('click', ev => {
           ev.stopPropagation();
           this.store.selectDrone(d.drone_id);
@@ -277,7 +278,12 @@ export class TheatreMap implements OnDestroy {
         this.droneMarkers.set(d.drone_id, marker);
       }
       const el = marker.getElement();
-      el.className = `drone-marker status-${d.trust_status}${d.drone_id === selected ? ' selected' : ''}${d.is_armed ? '' : ' landed'}`;
+      // Preserve MapLibre's internal positioning classes (maplibregl-marker, maplibregl-marker-anchor-center)
+      el.classList.add('drone-marker');
+      el.classList.remove('status-GREEN', 'status-YELLOW', 'status-RED');
+      el.classList.add(`status-${d.trust_status}`);
+      el.classList.toggle('selected', d.drone_id === selected);
+      el.classList.toggle('landed', !d.is_armed);
       el.setAttribute('aria-label', `Drone ${d.drone_id}, trust ${Math.round(d.trust_score)}`);
       el.innerHTML = `<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}</span>`;
       marker.setLngLat([d.longitude, d.latitude]);
@@ -315,7 +321,9 @@ async function loadRealStyle(): Promise<StyleSpecification | null> {
     const style = (await res.json()) as StyleSpecification;
     // The style ships without a credit line; OpenFreeMap and OSM require one.
     for (const src of Object.values(style.sources)) {
-      if ('url' in src || 'tiles' in src) (src as { attribution?: string }).attribution = REAL_ATTRIBUTION;
+      if (src && typeof src === 'object' && ('url' in src || 'tiles' in src)) {
+        (src as { attribution?: string }).attribution = REAL_ATTRIBUTION;
+      }
     }
     return tintBasemap(style);
   } catch {

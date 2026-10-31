@@ -1,6 +1,9 @@
 // Backend endpoints (FastAPI, see Backend/app/main.py). Override at runtime with
 // ?api=http://host:8000 in the URL, which is remembered in localStorage.
-const DEFAULT_API = 'http://localhost:8000';
+const DEFAULT_API =
+  typeof window !== 'undefined' && window.location?.hostname
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : 'http://localhost:8000';
 
 function resolveApiBase(): string {
   try {

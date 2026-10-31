@@ -22,7 +22,7 @@ export class DecisionPanel {
     return d ? evaluateActions(d, this.store.zones()) : [];
   });
 
-  protected canCommand = computed(() => this.store.mode() === 'offline');
+  protected canCommand = computed(() => this.store.mode() === 'offline' || this.store.link() === 'online');
 
   protected history = computed(() => this.store.recommendations().filter(r => r.status !== 'PENDING'));
 

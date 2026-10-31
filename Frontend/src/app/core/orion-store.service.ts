@@ -7,7 +7,7 @@ import {
 } from './models';
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
-import { OrionApi } from './orion-api.service';
+import { OrionApi, SimulationAction } from './orion-api.service';
 
 export interface Toast {
   id: number;
@@ -16,7 +16,16 @@ export interface Toast {
   body: string;
 }
 
-type Trigger = 'spoofing' | 'replay' | 'interference' | 'linkloss';
+export type Trigger =
+  | 'random'
+  | 'spoofing'
+  | 'replay'
+  | 'interference'
+  | 'linkloss'
+  | 'corridor-appear'
+  | 'corridor-disappear'
+  | 'danger-appear'
+  | 'danger-disappear';
 
 const HISTORY_LEN = 90;
 
@@ -26,7 +35,12 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
   RECOMMENDATION_ISSUED: { level: 'warn', title: 'Decision needed' },
   COMMAND_REPLAY_REJECTED: { level: 'critical', title: 'Replayed command rejected' },
   COMMAND_AUTH_FAILED: { level: 'critical', title: 'Unauthenticated command rejected' },
-  ZONE_INTERFERENCE_MARKED: { level: 'warn', title: 'Sector marked as interference' },
+  ZONE_INTERFERENCE_MARKED: { level: 'warn', title: 'EW jammer active in sector' },
+  SAFE_CORRIDOR_ESTABLISHED: { level: 'ok', title: 'New safe corridor opened' },
+  SAFE_CORRIDOR_COMPROMISED: { level: 'warn', title: 'Safe corridor compromised' },
+  THREAT_ZONE_DETECTED: { level: 'critical', title: 'New danger zone detected' },
+  THREAT_ZONE_CLEARED: { level: 'ok', title: 'Danger zone cleared' },
+  GPS_RESTORED: { level: 'ok', title: 'GPS lock restored' },
   OPERATOR_APPROVAL: { level: 'ok', title: 'Action approved' },
   OPERATOR_COMMAND: { level: 'ok', title: 'Signed command sent' },
   MISSION_REPORT_READY: { level: 'info', title: 'Post-action report ready' },
@@ -39,7 +53,7 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
 
 /**
  * Single source of truth for the dashboard. In "live" mode it listens to the backend
- * WebSocket and polls REST; in "offline" mode it drives the in-browser Plan B simulator.
+ * WebSocket and polls REST; in "offline" (Demo) mode it drives the deterministic 3-minute demo simulator.
  */
 @Injectable({ providedIn: 'root' })
 export class OrionStore implements OnDestroy {
@@ -140,7 +154,7 @@ export class OrionStore implements OnDestroy {
     if (allowFallback) {
       this.fallbackTimer = setTimeout(() => {
         if (this.link() !== 'online') {
-          this.pushToast('warn', 'Backend unreachable', `No answer from ${ORION_CONFIG.apiBase}. Running the offline scenario (Plan B).`);
+          this.pushToast('warn', 'Backend unreachable', `No answer from ${ORION_CONFIG.apiBase}. Switched to Demo mode.`);
           this.setMode('offline', false);
         }
       }, 4000);
@@ -199,7 +213,7 @@ export class OrionStore implements OnDestroy {
     }
   }
 
-  // ---- offline simulator -----------------------------------------------------------------
+  // ---- demo simulator --------------------------------------------------------------------
 
   private startOffline(): void {
     this.link.set('offline');
@@ -297,8 +311,18 @@ export class OrionStore implements OnDestroy {
       if (kind === 'linkloss') this.offline.triggerLinkLoss();
       return;
     }
-    if (kind === 'linkloss') return; // offline-only scenario beat
-    const action = kind === 'spoofing' ? 'trigger-spoofing' : kind === 'replay' ? 'trigger-replay' : 'trigger-sector-interference';
+    if (kind === 'linkloss') return; // Demo-only scenario beat
+    const actionMap: Record<Exclude<Trigger, 'linkloss'>, SimulationAction> = {
+      random: 'trigger-random',
+      spoofing: 'trigger-spoofing',
+      replay: 'trigger-replay',
+      interference: 'trigger-sector-interference',
+      'corridor-appear': 'trigger-corridor-appear',
+      'corridor-disappear': 'trigger-corridor-disappear',
+      'danger-appear': 'trigger-danger-appear',
+      'danger-disappear': 'trigger-danger-disappear',
+    };
+    const action = actionMap[kind];
     await this.call(() => this.api.simulation(action));
     this.pollLive();
   }
@@ -309,11 +333,7 @@ export class OrionStore implements OnDestroy {
   }
 
   /** Operator picks an action for a drone directly, instead of approving an ORION recommendation. */
-  commandDrone(droneId: number, action: ActionOption['id']): void {
-    if (!this.offline) {
-      this.pushToast('warn', 'Not available in Live mode', 'The backend has no endpoint for direct commands yet; approve a recommendation instead.');
-      return;
-    }
+  async commandDrone(droneId: number, action: ActionOption['id']): Promise<void> {
     // Re-check against the latest position and zones: the list on screen may be a tick old.
     const drone = this.drones().find(d => d.drone_id === droneId);
     const option = drone && evaluateActions(drone, this.zones()).find(a => a.id === action);
@@ -321,8 +341,16 @@ export class OrionStore implements OnDestroy {
       this.pushToast('critical', 'Command blocked', option ? `${option.label}: ${option.reason}` : `Drone ${droneId} not found`);
       return;
     }
-    const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId);
-    if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
+    if (this.offline) {
+      const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId);
+      if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
+      return;
+    }
+    const res = await this.call(() => this.api.command(droneId, action, option.reason));
+    if (res?.signed_command) {
+      this.pushToast('ok', 'Signed command sent', `${res.signed_command.command} → Drone ${res.signed_command.drone_id} (seq ${res.signed_command.sequence})`);
+    }
+    this.pollLive();
   }
 
   async decide(rec: Recommendation, decision: 'APPROVE' | 'REJECT'): Promise<void> {
@@ -346,7 +374,7 @@ export class OrionStore implements OnDestroy {
     return result;
   }
 
-  /** Offline-only demonstration that editing any record breaks the chain. */
+  /** Demo-only demonstration that editing any record breaks the chain. */
   async tamperDemo(): Promise<void> {
     if (!this.offline) return;
     const evs = this.offline.ledger.events;
@@ -371,7 +399,7 @@ export class OrionStore implements OnDestroy {
         total_events: timeline.length,
         event_counts: counts,
         affected_drones: [...new Set(timeline.map(e => e.drone_id).filter((d): d is number => d !== null))],
-        source: 'OFFLINE_PLAN_B',
+        source: 'DEMO_MODE',
       },
     };
   }
@@ -395,7 +423,7 @@ export class OrionStore implements OnDestroy {
       }));
       const body: Parameters<OrionApi['copilotAsk']>[0] = { question: q, history, fleet, elapsed_s: this.elapsed() };
       if (this.offline) {
-        // The offline ledger only exists in this browser: send it, with our own chain check.
+        // The demo ledger only exists in this browser: send it, with our own chain check.
         const events = this.offline.ledger.events;
         body.events = events.map(({ prev_hash: _p, curr_hash: _c, ...rest }) => rest);
         body.chain_valid = (await verifyChain(events)).is_valid;

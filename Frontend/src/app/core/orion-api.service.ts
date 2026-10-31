@@ -4,6 +4,19 @@ import { firstValueFrom } from 'rxjs';
 import { ORION_CONFIG } from './config';
 import { AuditEvent, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
 
+export type SimulationAction =
+  | 'start'
+  | 'stop'
+  | 'reset'
+  | 'trigger-random'
+  | 'trigger-spoofing'
+  | 'trigger-replay'
+  | 'trigger-sector-interference'
+  | 'trigger-corridor-appear'
+  | 'trigger-corridor-disappear'
+  | 'trigger-danger-appear'
+  | 'trigger-danger-disappear';
+
 /** REST client for the FastAPI backend (Backend/app/api/endpoints). */
 @Injectable({ providedIn: 'root' })
 export class OrionApi {
@@ -41,7 +54,18 @@ export class OrionApi {
     );
   }
 
-  simulation(action: 'start' | 'stop' | 'reset' | 'trigger-spoofing' | 'trigger-replay' | 'trigger-sector-interference') {
+  command(droneId: number, action: string, notes?: string) {
+    return firstValueFrom(
+      this.http.post<DecisionResult>(`${this.base}/actions/command`, {
+        drone_id: droneId,
+        action,
+        operator_id: ORION_CONFIG.operatorId,
+        notes,
+      }),
+    );
+  }
+
+  simulation(action: SimulationAction) {
     return firstValueFrom(this.http.post<{ status: string }>(`${this.base}/simulation/${action}`, {}));
   }
 

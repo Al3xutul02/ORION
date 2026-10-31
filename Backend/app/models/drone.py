@@ -57,4 +57,4 @@ class DroneScore(Base):
 
     # Uncertainty circle radius (meters) - expands when trust drops
     uncertainty_radius_m = Column(Float, default=0.0)
-    reason = Column(String(255), default="Nominal state")
+    reason = Column(String(512), default="Nominal state")

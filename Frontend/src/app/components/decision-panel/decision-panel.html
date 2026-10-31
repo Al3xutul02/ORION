@@ -100,7 +100,7 @@
                   class="btn sm"
                   type="button"
                   [disabled]="!canCommand()"
-                  [title]="canCommand() ? 'Send a signed command' : 'Live backend has no direct-command endpoint yet'"
+                  [title]="canCommand() ? 'Send a signed command' : 'Connect to the live backend or switch to Demo mode'"
                   (click)="confirming.set(a.id)"
                 >
                   Send
@@ -112,7 +112,7 @@
       </ul>
 
       @if (!canCommand()) {
-        <p class="note">Live mode: direct commands need a backend endpoint. For now, approve ORION's recommendations above.</p>
+        <p class="note">Backend offline: connect to the live backend or switch to Demo mode to send direct commands.</p>
       } @else {
         <p class="note">Each command is signed and written to the after-action log. Blocked actions can't be sent.</p>
       }

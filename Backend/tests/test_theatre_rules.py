@@ -1,12 +1,12 @@
 import pytest
-from app.services.theatre_rules import TheatreRulesEngine
+from app.services.theatre_rules import TheatreRulesEngine, haversine_distance_m, MAX_ACTIVE_DANGER_ZONES
 
 
 def test_rtl_blocking_when_crossing_ew_zone():
     engine = TheatreRulesEngine()
-    
+
     # Drone positioned at (44.3350, 23.8350)
-    # Direct line to Base (44.3160, 23.8000) crosses EW Jamming Zone Sector 4 (center 44.3280, 23.8200)
+    # Direct line to Base (44.3160, 23.8000) crosses EW Jamming Zone Sector 4
     drone_lat = 44.3350
     drone_lon = 23.8350
 
@@ -35,3 +35,22 @@ def test_safe_path_allows_standard_recommendation():
     is_safe, reason = engine.is_path_safe_to_base(drone_lat, drone_lon)
     assert is_safe is True
     assert reason is None
+
+
+def test_spawned_danger_zones_do_not_overlap_or_exceed_cap():
+    engine = TheatreRulesEngine()
+    for _ in range(10):
+        engine.spawn_danger_zone()
+        engine.add_dynamic_interference_zone("Mobile EW Jammer Sector", 44.3350, 23.8300, 400.0)
+
+        active_dangers = engine.active_danger_zones()
+        assert len(active_dangers) <= MAX_ACTIVE_DANGER_ZONES
+
+        circles = [z for z in engine.active_zones() if z.get("geometry_type") == "CIRCLE"]
+        for i in range(len(circles)):
+            for j in range(i + 1, len(circles)):
+                c1, c2 = circles[i], circles[j]
+                dist = haversine_distance_m(c1["center"][0], c1["center"][1], c2["center"][0], c2["center"][1])
+                assert dist >= (c1["radius_m"] + c2["radius_m"]), (
+                    f"Zones {c1['name']} and {c2['name']} overlap! dist={dist:.1f}m < {c1['radius_m'] + c2['radius_m']:.1f}m"
+                )

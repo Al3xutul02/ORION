@@ -136,8 +136,41 @@
 .timeline {
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding: 4px 16px 10px;
+}
+
+.live-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 240px;
+  font-size: 12px;
+
+  .pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-faint);
+
+    &.active {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+    }
+  }
+
+  .live-title {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .live-sub {
+    color: var(--text-dim);
+    font-size: 11.5px;
+  }
 }
 
 .track {
@@ -202,6 +235,7 @@
 .inject {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 
   .hint {

@@ -16,16 +16,16 @@
 
   <div class="mode no-print" role="group" aria-label="Data source">
     <button type="button" [class.on]="store.mode() === 'live'" (click)="store.setMode('live')">Live</button>
-    <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Offline</button>
+    <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Demo</button>
   </div>
 
-  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'In-browser scenario (Plan B)'">
+  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'Deterministic 3-minute demo scenario'">
     <span class="dot"></span>
     @switch (store.mode() === 'offline' ? 'local' : store.link()) {
       @case ('online') { Backend online }
       @case ('connecting') { Connecting… }
       @case ('offline') { Backend offline }
-      @default { Local scenario }
+      @default { Demo mode }
     }
   </span>
 
@@ -33,7 +33,7 @@
 
   <div class="clock mono" aria-label="Mission time">
     <span class="t">T+{{ clock() }}</span>
-    <span class="step">{{ currentStep().label }}</span>
+    <span class="step">{{ store.mode() === 'offline' ? currentStep().label : 'Dynamic battlefield' }}</span>
   </div>
 
   <div class="controls no-print">
@@ -57,22 +57,39 @@
 </header>
 
 <div class="timeline no-print">
-  <div class="track">
-    <div class="fill" [style.width.%]="progress()"></div>
-    @for (s of scenario(); track s.at) {
-      <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
-        <span class="pin"></span>
-        <span class="lbl">{{ s.label }}</span>
-      </span>
-    }
-  </div>
-  <div class="inject">
-    <span class="hint">Inject:</span>
-    <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
-    <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
-    <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">{{ store.mode() === 'offline' ? 'Mobile jammer' : 'Sector jam' }}</button>
-    @if (store.mode() === 'offline') {
+  @if (store.mode() === 'offline') {
+    <div class="track">
+      <div class="fill" [style.width.%]="progress()"></div>
+      @for (s of scenario(); track s.at) {
+        <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
+          <span class="pin"></span>
+          <span class="lbl">{{ s.label }}</span>
+        </span>
+      }
+    </div>
+    <div class="inject">
+      <span class="hint">Demo toys:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
+      <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
+      <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Mobile jammer</button>
       <button class="btn sm" type="button" (click)="store.trigger('linkloss')">Link loss D5</button>
-    }
-  </div>
+    </div>
+  } @else {
+    <div class="live-banner">
+      <span class="pulse-dot" [class.active]="store.running()"></span>
+      <span class="live-title">Live EW Simulation</span>
+      <span class="live-sub">{{ liveTheatreSummary() }} · Random battlefield events occur automatically while running</span>
+    </div>
+    <div class="inject">
+      <span class="hint">Battlefield events:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">🎲 Random event</button>
+      <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
+      <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
+      <button class="btn sm" type="button" (click)="store.trigger('corridor-appear')" [disabled]="store.busy()" title="Establish a new safe evacuation corridor">+ Safe corridor</button>
+      <button class="btn sm" type="button" (click)="store.trigger('corridor-disappear')" [disabled]="store.busy()" title="Compromise an existing safe corridor">− Safe corridor</button>
+      <button class="btn sm" type="button" (click)="store.trigger('danger-appear')" [disabled]="store.busy()" title="Spawn a new enemy danger zone in the theatre">+ Danger zone</button>
+      <button class="btn sm" type="button" (click)="store.trigger('danger-disappear')" [disabled]="store.busy()" title="Neutralize/clear an active danger zone">− Danger zone</button>
+      <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
+    </div>
+  }
 </div>

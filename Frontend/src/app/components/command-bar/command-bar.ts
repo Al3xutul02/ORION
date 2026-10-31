@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { ORION_CONFIG } from '../../core/config';
-import { SCENARIO, SCENARIO_EXTENDED } from '../../core/models';
+import { SCENARIO_EXTENDED } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 
 const DEMO_LENGTH_S = 180;
@@ -15,7 +15,7 @@ const DEMO_LENGTH_S = 180;
 })
 export class CommandBar {
   protected store = inject(OrionStore);
-  protected scenario = computed(() => (this.store.mode() === 'offline' ? SCENARIO_EXTENDED : SCENARIO));
+  protected scenario = computed(() => SCENARIO_EXTENDED);
   protected apiBase = ORION_CONFIG.apiBase;
   protected speeds = [1, 2, 4];
 
@@ -34,5 +34,12 @@ export class CommandBar {
     const t = this.store.elapsed();
     const steps = this.scenario();
     return [...steps].reverse().find(s => t >= s.at) ?? steps[0];
+  });
+
+  protected liveTheatreSummary = computed(() => {
+    const zs = this.store.zones();
+    const corridors = zs.filter(z => z.zone_type === 'SAFE_CORRIDOR').length;
+    const hazards = zs.filter(z => z.zone_type === 'THREAT' || z.zone_type === 'INTERFERENCE').length;
+    return `${corridors} safe corridor${corridors === 1 ? '' : 's'} · ${hazards} danger/EW zone${hazards === 1 ? '' : 's'}`;
   });
 }

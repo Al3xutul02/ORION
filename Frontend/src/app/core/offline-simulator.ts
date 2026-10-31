@@ -57,6 +57,7 @@ interface SimDrone {
   jammedAt: number | null;
   linkLostAt: number | null;
   failsafeDone: boolean;
+  safeAirspaceTime: number;
   mode: 'PATROL' | 'LOITER' | 'EGRESS' | 'LANDED';
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
@@ -121,12 +122,12 @@ export class OfflineSimulator {
     ];
     this.drones = fleet.map(([sector, angle], i) => ({
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
-      mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
+      safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
     }));
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
     this.log('SYSTEM_INITIALIZED', null, {
-      system: 'ORION Ground Control Station', mode: 'OFFLINE_PLAN_B',
+      system: 'ORION Ground Control Station', mode: 'DEMO_MODE',
       exercise: 'Simulated defensive exercise, Craiova area', drones: this.drones.length,
     });
     this.cb.onRecommendations([]);
@@ -149,7 +150,10 @@ export class OfflineSimulator {
     if (this.elapsed >= SCRIPT.report) this.markReportReady();
 
     this.moveJammer(dt);
-    for (const d of this.drones) this.move(d, dt);
+    for (const d of this.drones) {
+      this.move(d, dt);
+      this.updateRecalibration(d, dt);
+    }
     this.updateJamming();
     this.updateLinks();
     this.emit();
@@ -348,6 +352,56 @@ export class OfflineSimulator {
         j.lat += (tLat - j.lat) * f; j.lon += (tLon - j.lon) * f;
         budget = 0;
       }
+    }
+  }
+
+  /**
+   * When a spoofed/jammed drone retreats via a safe corridor or loiters in clean airspace
+   * outside all active hazard zones for ~4 seconds, its onboard EKF/IMU recalibrates.
+   */
+  private updateRecalibration(d: SimDrone, dt: number): void {
+    if (d.mode === 'LANDED' || d.mode === 'PATROL') {
+      d.safeAirspaceTime = 0;
+      return;
+    }
+    if (d.spoofedAt === null && d.jammedAt === null) {
+      d.safeAirspaceTime = 0;
+      return;
+    }
+
+    const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+    const repLat = d.lat + off.lat;
+    const repLon = d.lon + off.lon;
+
+    const insideZone = this.zones.some(
+      z =>
+        z.is_active &&
+        (z.zone_type === 'INTERFERENCE' || z.zone_type === 'THREAT') &&
+        z.geometry_type === 'CIRCLE' &&
+        z.center &&
+        z.radius_m &&
+        distanceM(repLat, repLon, z.center[0], z.center[1]) <= z.radius_m
+    );
+    const inJammer = !!this.jammer && distanceM(d.lat, d.lon, this.jammer.lat, this.jammer.lon) <= JAMMER.radiusM;
+
+    if (insideZone || inJammer) {
+      d.safeAirspaceTime = 0;
+      return;
+    }
+
+    d.safeAirspaceTime += dt;
+    if (d.safeAirspaceTime >= 4.0) {
+      if (d.spoofedAt !== null) {
+        // Commit current reported position as true position so the drone doesn't jump on recalibration
+        d.lat = repLat;
+        d.lon = repLon;
+        d.spoofedAt = null;
+      }
+      d.jammedAt = null;
+      d.safeAirspaceTime = 0;
+      this.log('GPS_RESTORED', d.id, {
+        description: `Drone ${d.id} recalibrated onboard EKF/IMU in safe airspace (${d.mode}) and restored clean 3D GPS lock`,
+      });
     }
   }
 

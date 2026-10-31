@@ -6,7 +6,7 @@
       @if (report(); as r) {
         <p class="meta">
           Generated {{ r.generated_at | date: 'd MMM y, HH:mm:ss' }} ·
-          {{ store.mode() === 'offline' ? 'Offline scenario (Plan B)' : 'Live backend ledger' }} ·
+          {{ store.mode() === 'offline' ? 'Demo scenario' : 'Live backend ledger' }} ·
           Simulated, fictional theatre
         </p>
       }
@@ -34,7 +34,7 @@
 
     <div class="cols">
       <section class="block">
-        <h2>Attacks detected</h2>
+        <h2>Attacks &amp; threats detected</h2>
         @for (e of attacks(); track e.id) {
           <div class="item">
             <span class="mono faint">{{ e.timestamp | date: 'HH:mm:ss' }}</span>
@@ -107,6 +107,6 @@
       </table>
     </section>
   } @else if (!loading()) {
-    <p class="empty">Could not build the report. Check that the backend is reachable, or switch to Offline mode.</p>
+    <p class="empty">Could not build the report. Check that the backend is reachable, or switch to Demo mode.</p>
   }
 </div>

@@ -3,56 +3,88 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.simulator import simulator
 
-router = APIRouter(prefix="/simulation", tags=["Demo Simulation & Attacks"])
+router = APIRouter(prefix="/simulation", tags=["Simulation & Demo"])
 
 
 @router.post("/start")
-def start_simulation():
-    """Starts the 4-drone patrol simulation."""
+async def start_simulation():
     simulator.start()
-    return {"status": "RUNNING", "message": "Simulation started."}
+    return {"status": "started", "elapsed_time": simulator.elapsed_time}
 
 
 @router.post("/stop")
-def stop_simulation():
-    """Stops the simulation."""
+async def stop_simulation():
     simulator.stop()
-    return {"status": "STOPPED", "message": "Simulation stopped."}
+    return {"status": "stopped", "elapsed_time": simulator.elapsed_time}
 
 
 @router.post("/reset")
-def reset_simulation():
-    """Resets simulator to t=0s nominal patrol."""
+async def reset_simulation():
     simulator.reset()
-    return {"status": "RESET", "message": "Simulation reset to t=0."}
+    return {"status": "reset", "elapsed_time": 0.0}
+
+
+@router.post("/trigger-random")
+def trigger_random_event(db: Session = Depends(get_db)):
+    """Triggers a random battlefield event in Live mode."""
+    res = simulator.trigger_random_event(db)
+    return {**res, "status": "random_event_triggered"}
 
 
 @router.post("/trigger-spoofing")
-def trigger_spoofing(db: Session = Depends(get_db)):
-    """Triggers GPS spoofing attack on Drone 2 (teleportation jump & degraded GPS)."""
-    simulator.trigger_gps_spoofing_drone2(db)
-    return {"status": "ATTACK_TRIGGERED", "target": "Drone 2", "type": "GPS_SPOOFING"}
+def trigger_spoofing_scenario(db: Session = Depends(get_db)):
+    """Triggers GPS spoofing on a patrolling drone."""
+    res = simulator.trigger_gps_spoofing_drone2(db)
+    return {**res, "status": "spoofing_triggered"}
 
 
 @router.post("/trigger-replay")
-def trigger_replay_attack(db: Session = Depends(get_db)):
-    """Simulates an unauthorized adversary retransmitting an old signed MAVLink command."""
-    simulator.trigger_replay_attack(db)
-    return {"status": "ATTACK_TRIGGERED", "type": "COMMAND_REPLAY", "message": "Replayed command dispatched to validator."}
+def trigger_replay_attack_scenario(db: Session = Depends(get_db)):
+    """Simulates an adversary replaying a previously captured command."""
+    res = simulator.trigger_replay_attack(db)
+    return {**res, "status": "replay_attack_simulated"}
 
 
 @router.post("/trigger-sector-interference")
-def trigger_sector_interference(db: Session = Depends(get_db)):
-    """Triggers localized EW interference affecting Drone 1 & Drone 3."""
-    simulator.trigger_sector_interference(db)
-    return {"status": "ATTACK_TRIGGERED", "type": "SECTOR_INTERFERENCE"}
+def trigger_sector_interference_scenario(db: Session = Depends(get_db)):
+    """Simulates a localized EW jammer affecting nearby drones."""
+    res = simulator.trigger_sector_interference(db)
+    return {**res, "status": "sector_interference_activated"}
+
+
+@router.post("/trigger-corridor-appear")
+def trigger_corridor_appear_scenario(db: Session = Depends(get_db)):
+    """Opens a new safe evacuation corridor in the theatre."""
+    res = simulator.trigger_corridor_appear(db)
+    return {**res, "status": "safe_corridor_established"}
+
+
+@router.post("/trigger-corridor-disappear")
+def trigger_corridor_disappear_scenario(db: Session = Depends(get_db)):
+    """Marks an existing safe corridor as compromised and removes it."""
+    res = simulator.trigger_corridor_disappear(db)
+    return {**res, "status": "safe_corridor_compromised"}
+
+
+@router.post("/trigger-danger-appear")
+def trigger_danger_appear_scenario(db: Session = Depends(get_db)):
+    """Spawns a new danger zone at a random theatre position."""
+    res = simulator.trigger_danger_appear(db)
+    return {**res, "status": "danger_zone_detected"}
+
+
+@router.post("/trigger-danger-disappear")
+def trigger_danger_disappear_scenario(db: Session = Depends(get_db)):
+    """Clears an active danger zone from the theatre."""
+    res = simulator.trigger_danger_disappear(db)
+    return {**res, "status": "danger_zone_cleared"}
 
 
 @router.get("/status")
 def get_simulation_status():
-    """Returns simulator running state, elapsed time, and reached milestones."""
     return {
         "is_running": simulator.is_running,
-        "elapsed_time": simulator.elapsed_time,
-        "milestones": simulator.milestones_reached
+        "elapsed_time": round(simulator.elapsed_time, 1),
+        "spoofing_active_drone_2": simulator.spoofing_active_drone_2,
+        "sector_interference_active": simulator.sector_interference_active,
     }
