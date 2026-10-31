@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -28,6 +28,8 @@ class Transmission(BaseModel):
 class TransmissionOut(BaseModel):
     transcript: str
     language: str
+    drones: List[int] = []
+    kind: str = "OTHER"
     model: str
     logged: bool
     event_id: Optional[int] = None
@@ -49,7 +51,10 @@ def post_transmission(payload: Transmission, db: Session = Depends(get_db)):
     except CopilotUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    out = TransmissionOut(transcript=result["text"], language=result["language"], model=result["model"], logged=False)
+    out = TransmissionOut(
+        transcript=result["text"], language=result["language"], drones=result["drones"], kind=result["kind"],
+        model=result["model"], logged=False,
+    )
     if not result["text"] or not payload.log:
         return out  # nothing intelligible was said, or the browser logs it (Demo)
 
@@ -58,10 +63,13 @@ def post_transmission(payload: Transmission, db: Session = Depends(get_db)):
     entry = aar_service.log_event(
         db=db,
         event_type="RADIO_TRANSMISSION",
-        drone_id=None,
+        # One drone named: the record is about it (filters and the per-drone log pick it up).
+        drone_id=result["drones"][0] if len(result["drones"]) == 1 else None,
         details={
             "transcript": result["text"],
             "language": result["language"],
+            "drones": result["drones"],
+            "kind": result["kind"],
             "channel": payload.channel,
             "duration_s": round(payload.duration_s, 1),
             "started_at": payload.started_at,

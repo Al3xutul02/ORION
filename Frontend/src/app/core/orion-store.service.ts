@@ -8,6 +8,7 @@ import {
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
+import { RadioEntry, radioEntry } from './radio';
 import {
   AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
   scoreSession, seededRandom,
@@ -115,6 +116,10 @@ export class OrionStore implements OnDestroy {
   /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
   readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
   readonly radioSeconds = signal(0);
+  /** Every transmission in the log, oldest first (the Radio panel). */
+  readonly radioEntries = computed(() => this.events().map(radioEntry).filter((e): e is RadioEntry => e !== null));
+  /** What was just said about each drone, shown as a bubble on the map for a few seconds. */
+  readonly radioBubbles = signal<Record<number, { text: string; speaker: string; id: number }>>({});
   readonly commandScope = signal<'drone' | 'zone'>('drone');
 
   setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
@@ -449,6 +454,7 @@ export class OrionStore implements OnDestroy {
       return;
     }
     for (const e of fresh) {
+      if (e.event_type === 'RADIO_TRANSMISSION') this.showBubbles(e);
       const alert = ALERTS[e.event_type];
       if (alert) {
         this.pushToast(alert.level, alert.title, summarise(e));
@@ -489,6 +495,7 @@ export class OrionStore implements OnDestroy {
     this.clearCopilot();
     this.lastAlertedId = 0;
     this.training.set(null);
+    this.radioBubbles.set({});
     if (this.offline) {
       this.offline.scripted = true;
       this.offline.reset();
@@ -744,6 +751,23 @@ export class OrionStore implements OnDestroy {
 
   // ---- radio log (push-to-talk) ------------------------------------------------------------
 
+  /** A drone mentioned on the radio gets the line as a bubble on the map, then it fades. */
+  private showBubbles(e: AuditEvent): void {
+    const entry = radioEntry(e);
+    if (!entry?.drones.length) return;
+    const text = entry.text.length > 90 ? entry.text.slice(0, 88) + '…' : entry.text;
+    this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) next[d] = { text, speaker: entry.speaker, id: e.id };
+      return next;
+    });
+    setTimeout(() => this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) if (next[d]?.id === e.id) delete next[d];
+      return next;
+    }), 7000);
+  }
+
   private recorder: MediaRecorder | null = null;
   private recStartedAt = 0;
   private recTimer: ReturnType<typeof setInterval> | null = null;
@@ -819,6 +843,7 @@ export class OrionStore implements OnDestroy {
         if (sim && sim === this.offline) {
           sim.logRadio(res.transcript, ORION_CONFIG.operatorId, {
             duration_s: Math.round(durationS * 10) / 10, language: res.language, started_at: startedIso,
+            drones: res.drones, kind: res.kind,
             transcribed_by: res.model, mission_time_s: Math.max(0, Math.round(startElapsed * 10) / 10),
           });
         } else if (!sim) {

@@ -86,6 +86,7 @@ export class TheatreMap implements OnDestroy {
       const drones = this.store.drones();
       const zones = this.store.zones();
       const selected = this.store.selectedDroneId();
+      this.store.radioBubbles(); // a new radio mention redraws the markers right away
       if (this.ready) this.renderDrones(drones, zones, selected);
     });
 
@@ -575,7 +576,10 @@ export class TheatreMap implements OnDestroy {
       el.classList.toggle('landed', !d.is_armed);
       el.setAttribute('aria-label', `Drone ${d.drone_id}, trust ${Math.round(d.trust_score)}`);
       const alt = this.view3d() && d.is_armed ? ` · ${Math.round(d.altitude)} m` : '';
-      el.innerHTML = `<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}${alt}</span>`;
+      const said = this.store.radioBubbles()[d.drone_id];
+      el.classList.toggle('talking', !!said);
+      const bubble = said ? `<span class="bubble"><b>${escapeHtml(said.speaker)}</b>„${escapeHtml(said.text)}”</span>` : '';
+      el.innerHTML = `${bubble}<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}${alt}</span>`;
       marker.setLngLat([d.longitude, d.latitude]);
     }
     for (const [id, m] of this.droneMarkers) {

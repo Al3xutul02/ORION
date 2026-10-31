@@ -5,6 +5,7 @@ import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 import { AdversaryMoveKind, AdversaryOptions } from './training';
+import { RadioKind, dronesIn } from './radio';
 
 /**
  * Plan B from the spec, extended into a fuller (simulated, defensive) conflict exercise over
@@ -130,7 +131,7 @@ export class OfflineSimulator {
   /** Attacks ORION will turn into a recommendation once it has noticed them (training only). */
   private detections: { droneId: number; at: number; trigger: string }[] = [];
   /** Scripted radio chatter waiting to be "said" (exercise colour, marked simulated in the log). */
-  private radioCues: { at: number; speaker: string; text: string; droneId: number | null }[] = [];
+  private radioCues: { at: number; speaker: string; text: string; kind: RadioKind }[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
   private commandSeq = 6;
@@ -518,7 +519,7 @@ export class OfflineSimulator {
       approved_at: null,
     };
     this.recs = [rec, ...this.recs];
-    this.sayLater(3, 'TOC', 'Am văzut recomandarea ORION pentru D2. Decizia e la operator, nu întârziați.', 2);
+    this.sayLater(3, 'TOC', 'Am văzut recomandarea ORION pentru D2. Decizia e la operator, nu întârziați.', 'ORDER');
     this.log('RECOMMENDATION_ISSUED', 2, {
       recommendation_id: rec.id, blocked_action: rec.blocked_action,
       blocked_reason: rec.blocked_reason, recommended_action: rec.recommended_action,
@@ -529,7 +530,7 @@ export class OfflineSimulator {
   triggerReplay(): void {
     if (this.milestones.has('replay')) return;
     this.milestones.add('replay');
-    this.sayLater(2, 'OPERATOR_2', 'Comandă de întoarcere respinsă pentru D2, secvență veche. Cineva reia comenzi pe canal.', 2);
+    this.sayLater(2, 'OPERATOR_2', 'Comandă de întoarcere respinsă pentru D2, secvență veche. Cineva reia comenzi pe canal.');
     this.log('COMMAND_REPLAY_REJECTED', 2, {
       command: 'RETURN_TO_HOME', sequence: 5, age_s: 30,
       reason: 'Replay detected: sequence already consumed and timestamp expired',
@@ -645,16 +646,17 @@ export class OfflineSimulator {
   // ---- radio log ---------------------------------------------------------------------------
 
   /** A transcribed push-to-talk transmission, timed from when the mic was keyed. */
-  logRadio(transcript: string, speaker: string, details: Record<string, unknown> & { duration_s: number }): void {
-    this.log('RADIO_TRANSMISSION', null, {
+  logRadio(transcript: string, speaker: string, details: Record<string, unknown> & { duration_s: number; drones?: number[] }): void {
+    const drones = details.drones ?? dronesIn(transcript);
+    this.log('RADIO_TRANSMISSION', drones.length === 1 ? drones[0] : null, {
       transcript, channel: 'COMMAND_NET',
       mission_time_s: Math.max(0, Math.round((this.elapsed - details.duration_s) * 10) / 10),
-      ...details,
+      ...details, drones,
     }, speaker);
   }
 
-  private sayLater(delayS: number, speaker: string, text: string, droneId: number | null = null): void {
-    this.radioCues.push({ at: this.elapsed + delayS, speaker, text, droneId });
+  private sayLater(delayS: number, speaker: string, text: string, kind: RadioKind = 'REPORT'): void {
+    this.radioCues.push({ at: this.elapsed + delayS, speaker, text, kind });
   }
 
   private playRadio(): void {
@@ -662,18 +664,20 @@ export class OfflineSimulator {
     const due = this.radioCues.filter(c => this.elapsed >= c.at);
     this.radioCues = this.radioCues.filter(c => this.elapsed < c.at);
     for (const c of due) {
-      this.log('RADIO_TRANSMISSION', c.droneId, {
-        transcript: c.text, channel: 'COMMAND_NET', simulated: true, duration_s: Math.max(2, Math.round(c.text.length / 14)),
+      const drones = dronesIn(c.text);
+      this.log('RADIO_TRANSMISSION', drones.length === 1 ? drones[0] : null, {
+        transcript: c.text, channel: 'COMMAND_NET', simulated: true, drones, kind: c.kind,
+        duration_s: Math.max(2, Math.round(c.text.length / 14)),
       }, c.speaker);
     }
   }
 
   private saySpoofed(droneId: number): void {
-    this.sayLater(4, 'OPERATOR_2', `Atenție, D${droneId} a sărit pe hartă cu vreo 500 de metri. Nu e real, verific poziția.`, droneId);
+    this.sayLater(4, 'OPERATOR_2', `Atenție, D${droneId} a sărit pe hartă cu vreo 500 de metri. Nu e real, verific poziția.`);
   }
 
   private sayLinkLost(droneId: number): void {
-    this.sayLater(2, 'TOC', `D${droneId} nu mai răspunde la comenzi. Lăsăm failsafe-ul să lucreze, nu forțăm.`, droneId);
+    this.sayLater(2, 'TOC', `D${droneId} nu mai răspunde la comenzi. Lăsăm failsafe-ul să lucreze, nu forțăm.`, 'ORDER');
   }
 
   markReportReady(): void {
@@ -975,7 +979,7 @@ export class OfflineSimulator {
         this.log('COMMAND_LINK_RESTORED', d.id, {
           description: 'Link back. Drone keeps its failsafe action until the operator decides',
         });
-        this.sayLater(1, 'OPERATOR_2', `D${d.id} e din nou pe legătură. Păstrează acțiunea de failsafe până decidem.`, d.id);
+        this.sayLater(1, 'OPERATOR_2', `D${d.id} e din nou pe legătură. Păstrează acțiunea de failsafe până decidem.`);
         if (!this.scripted && d.mode === 'LOITER') this.recommendFor(d.id, 'COMMAND_LINK_RESTORED');
       }
     }

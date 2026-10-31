@@ -39,7 +39,7 @@ def fake_gemini(monkeypatch):
 
 
 def test_transmission_is_transcribed_and_hash_chained(client, fake_gemini):
-    fake = fake_gemini({"text": "Pierd GPS pe D3 și D4, pare bruiaj.", "language": "ro"})
+    fake = fake_gemini({"text": "Pierd GPS pe D3 și D4, pare bruiaj.", "language": "ro", "drones": [3, 4], "kind": "REPORT"})
     res = client.post("/api/v1/radio/transmissions", json=body())
     assert res.status_code == 200
     out = res.json()
@@ -54,6 +54,8 @@ def test_transmission_is_transcribed_and_hash_chained(client, fake_gemini):
     assert radio["event_type"] == "RADIO_TRANSMISSION" and radio["operator_id"] == "OPERATOR_1"
     details = json.loads(radio["details"])
     assert details["transcript"].startswith("Pierd GPS") and details["duration_s"] == 3.2
+    assert details["drones"] == [3, 4] and details["kind"] == "REPORT" and radio["drone_id"] is None
+    assert out["drones"] == [3, 4] and out["kind"] == "REPORT"
     assert "audio" not in json.dumps(details).lower().replace("audio/", "")  # text only, never the recording
     assert client.get("/api/v1/aar/verify").json()["is_valid"]
 
@@ -124,3 +126,16 @@ def test_concurrent_writers_do_not_fork_the_chain(client, monkeypatch):
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(write, range(40)))
     assert client.get("/api/v1/aar/verify").json()["is_valid"]
+
+
+def test_one_named_drone_owns_the_record(client, fake_gemini):
+    fake_gemini({"text": "D2, treci în loiter.", "language": "ro", "drones": [2], "kind": "ORDER"})
+    out = client.post("/api/v1/radio/transmissions", json=body()).json()
+    radio = next(e for e in client.get("/api/v1/aar/events").json() if e["id"] == out["event_id"])
+    assert radio["drone_id"] == 2 and json.loads(radio["details"])["kind"] == "ORDER"
+
+
+def test_model_tags_are_cleaned():
+    from app.services.radio_service import clean_drones
+    assert clean_drones([3, 3, 0, 4, 120, True, "5", 1]) == [3, 4, 1]
+    assert clean_drones("D3") == []

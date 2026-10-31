@@ -56,7 +56,8 @@ export class AarLog {
       if (!ids.length) return;
       queueMicrotask(() => {
         const rows = [...this.host.nativeElement.querySelectorAll<HTMLElement>('[data-event-id]')];
-        rows.find(r => ids.includes(Number(r.dataset['eventId'])))?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        const first = rows.find(r => Number(r.dataset['eventId']) === ids[0]) ?? rows.find(r => ids.includes(Number(r.dataset['eventId'])));
+        first?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       });
     });
   }

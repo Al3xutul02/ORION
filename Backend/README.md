@@ -111,7 +111,8 @@ Toate cele 14 teste verifică:
 ### 🎙 Jurnal radio transcris automat
 
 - `POST /api/v1/radio/transmissions` (audio base64, max ~60 s): Gemini (`RADIO_TRANSCRIBE_MODEL`, implicit `gemini-3.5-flash-lite`) transcrie cuvânt cu cuvânt; în Live transmisia intră în jurnalul AAR cu lanț de hash ca `RADIO_TRANSMISSION` (text, vorbitor, ora apăsării pe stație). Audio-ul nu e salvat. În Demo (`log: false`) doar transcrie, iar browserul scrie în propriul jurnal.
-- Copilotul citează transcrierile alături de evenimentele sistemului din același minut („ce s-a discutat când a apărut bruiajul?”).
+- Gemini etichetează și dronele pomenite (`drones`) și tipul transmisiei (`kind`: REPORT, ORDER, QUESTION, ACK, OTHER); o singură dronă pomenită devine și `drone_id`-ul înregistrării.
+- Copilotul citează transcrierile alături de evenimentele sistemului din același minut („ce s-a discutat când a apărut bruiajul?”, „ce s-a spus despre D3?”).
 - Scrierile în jurnal sunt serializate (`aar_service._append_lock`): înainte, o aprobare și simulatorul care scriau în aceeași clipă puteau lega două înregistrări de același hash anterior și rupeau lanțul.
 
 ### 🎯 Antrenament cu AI ca adversar (modul Demo)

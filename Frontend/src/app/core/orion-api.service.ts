@@ -147,7 +147,7 @@ export class OrionApi {
     audio_base64: string; mime_type: string; duration_s: number; operator_id: string; started_at: string; log: boolean;
   }) {
     return firstValueFrom(
-      this.http.post<{ transcript: string; language: string; model: string; logged: boolean; event_id: number | null }>(
+      this.http.post<{ transcript: string; language: string; drones: number[]; kind: string; model: string; logged: boolean; event_id: number | null }>(
         `${this.base}/radio/transmissions`, body,
       ).pipe(timeout(30000)),
     );
