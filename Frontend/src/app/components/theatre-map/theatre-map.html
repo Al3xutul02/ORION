@@ -52,6 +52,9 @@
   @if (basemap() === 'real') {
     <span class="note">Exercise zones over a real map</span>
   }
+  @if (view3d()) {
+    <span class="note">3D: heights &times;{{ exaggeration }}</span>
+  }
 </div>
 
 <div class="overlay-tr">
@@ -102,5 +105,13 @@
     <button type="button" [class.on]="basemap() === 'real'" (click)="setBasemap('real')">Real map</button>
     <button type="button" [class.on]="basemap() === 'grid'" (click)="setBasemap('grid')">Grid</button>
   </div>
+  <button
+    class="btn sm"
+    type="button"
+    [class.primary]="view3d()"
+    [attr.aria-pressed]="view3d()"
+    (click)="toggle3d()"
+    title="3D view: terrain and drone altitudes (heights exaggerated). Right-drag or Ctrl-drag to rotate and tilt."
+  >3D</button>
   <button class="btn sm" type="button" (click)="recenter()">Recenter</button>
 </div>
