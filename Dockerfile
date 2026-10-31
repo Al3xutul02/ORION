@@ -170,7 +170,9 @@ export MYSQL_DATABASE="$MYSQL_DATABASE"
 export MYSQL_USER="$MYSQL_USER"
 export MYSQL_PASSWORD="$MYSQL_PASSWORD"
 
-echo "[start] Starting Nginx (Frontend on :4200)..."
+WEB_PORT="${PORT:-4200}"
+sed -i "s/4200/$WEB_PORT/g" /etc/nginx/sites-available/default
+echo "[start] Starting Nginx (Frontend on :$WEB_PORT)..."
 nginx -g 'daemon off;' &
 NGINX_PID=$!
 

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: orion
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 4200
