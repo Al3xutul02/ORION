@@ -67,6 +67,24 @@
       </section>
 
       <section>
+        <h3>Mesh (drone-to-drone)</h3>
+        @if (d.mesh; as m) {
+          <p [class.bad]="m.status === 'OUTLIER'" [class.good]="m.status === 'TRUSTED'">{{ meshStatus(m.status) }}</p>
+          @for (l of m.links; track l.peer_id) {
+            <div class="mesh-row" [class.off]="!l.consistent">
+              <span class="mono">D{{ l.peer_id }}</span>
+              <span class="mono">GPS {{ l.gps_distance_m | number: '1.0-0' }} m</span>
+              <span class="mono">radio {{ l.radio_range_m | number: '1.0-0' }} m</span>
+              <span>{{ l.consistent ? '✓' : '✕' }}</span>
+            </div>
+          }
+          <p class="dim">Each neighbour measures its range to this drone by radio time-of-flight, which a GPS spoofer can't fake, and compares it with the GPS positions. Range {{ meshRangeKm }} km.</p>
+        } @else {
+          <p class="dim">No mesh data (drone offline or landed).</p>
+        }
+      </section>
+
+      <section>
         <h3>Position &amp; flight</h3>
         <dl>
           <dt>Position</dt><dd class="mono">{{ d.latitude | number: '1.5-5' }}, {{ d.longitude | number: '1.5-5' }}</dd>

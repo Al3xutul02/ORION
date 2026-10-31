@@ -38,8 +38,14 @@ class DroneTrustEvaluator:
         drone_id: int,
         telemetry: Dict[str, Any],
         peer_telemetries: Optional[List[Dict[str, Any]]] = None,
-        command_valid: bool = True
+        command_valid: bool = True,
+        mesh_score: Optional[float] = None,
+        mesh_reason: Optional[str] = None,
     ) -> DroneScoreBreakdown:
+        """
+        mesh_score / mesh_reason come from the drone-to-drone mesh (services/mesh.py). When the
+        drone has neighbours in radio range they replace the ground-station formation check.
+        """
         current_time = time.time()
         lat = telemetry.get("latitude", 0.0)
         lon = telemetry.get("longitude", 0.0)
@@ -119,7 +125,12 @@ class DroneTrustEvaluator:
         # -------------------------------------------------------------
         consensus_score = 100.0
         peers = peer_telemetries or []
-        if peers and last_state:
+        if mesh_score is not None:
+            # Peers measured their range to this drone by radio: that beats comparing GPS positions.
+            consensus_score = mesh_score
+            if mesh_reason:
+                reasons.append(mesh_reason)
+        elif peers and last_state:
             # Check formation geometry consistency with peers
             # If this drone moved radically while peers moved normally, consensus penalizes this drone
             peer_anomalies = 0

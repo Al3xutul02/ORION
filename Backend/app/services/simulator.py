@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Callable
 from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
 from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
-from app.services import weather
+from app.services import mesh, weather
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
 from app.models.recommendation import ActionRecommendation
@@ -879,14 +879,31 @@ class OrionFleetSimulator:
                         d_data["battery_used"] = (d_data.get("battery_used", 0.0) + 0.08 * dt * wx_fx["battery_mult"]) % 80.0
                     fleet_telemetry.append(self.get_telemetry(d_id))
 
+                # Drone-to-drone mesh: neighbours range each other by radio and vote on whose GPS is lying.
+                mesh_view = mesh.compute_mesh(
+                    [
+                        mesh.MeshNode(
+                            drone_id=d_id,
+                            true_pos=(d["lat"], d["lon"]),
+                            reported_pos=self._reported_position(d),
+                            online=d["mode"] != "LANDED",
+                        )
+                        for d_id, d in self.drones.items()
+                    ],
+                    haversine_distance_m,
+                )
+
                 # Run trust evaluator across fleet using perceived telemetry only
                 for telem in fleet_telemetry:
                     d_id = telem["drone_id"]
+                    peer_view = mesh_view.get(d_id)
                     score_breakdown = trust_evaluator.evaluate(
                         drone_id=d_id,
                         telemetry=telem,
                         peer_telemetries=fleet_telemetry,
-                        command_valid=True
+                        command_valid=True,
+                        mesh_score=peer_view["score"] if peer_view else None,
+                        mesh_reason=mesh.describe(peer_view),
                     )
 
                     wx = self.drones[d_id].get("weather_now")
@@ -901,6 +918,7 @@ class OrionFleetSimulator:
                         "uncertainty_radius_m": score_breakdown.uncertainty_radius_m,
                         "reason": score_breakdown.reason,
                         "scores": score_breakdown.model_dump(mode="json"),
+                        "mesh": peer_view,
                         "last_updated": datetime.now(timezone.utc).isoformat()
                     }
                     drone_states.append(state_dict)

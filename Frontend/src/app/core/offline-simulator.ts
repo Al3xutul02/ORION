@@ -1,5 +1,6 @@
 import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
+import { computeMesh, describeMesh } from './mesh';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 
@@ -711,6 +712,21 @@ export class OfflineSimulator {
 
   private states(): DroneState[] {
     const ts = new Date().toISOString();
+    // Drone-to-drone mesh: neighbours range each other by radio and vote on whose GPS is lying.
+    // Radio noise is deterministic here so the Demo plays out the same every time.
+    const meshView = computeMesh(
+      this.drones.map(d => {
+        const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+        return {
+          droneId: d.id,
+          truePos: [d.lat, d.lon] as [number, number],
+          reportedPos: [d.lat + off.lat, d.lon + off.lon] as [number, number],
+          online: d.mode !== 'LANDED' && !this.linkDown(d),
+        };
+      }),
+      distanceM,
+      (a, b) => 5 * Math.sin(a * 31 + b * 17 + this.elapsed * 3.1),
+    );
     return this.drones.map(d => {
       const spoofed = d.spoofedAt !== null;
       const jammed = d.jammedAt !== null;
@@ -738,7 +754,7 @@ export class OfflineSimulator {
         imu = 10;
         unc = Math.min(450, 60 + t * 6);
         consensus = 15;
-        reasons.push('Impossible position jump (≈560 m in 0.5 s)', 'Neighbor consensus mismatch (diverged from patrol formation)');
+        reasons.push('Impossible position jump (≈560 m in 0.5 s)');
       }
       if (jammed) {
         const t = this.elapsed - d.jammedAt!;
@@ -750,6 +766,15 @@ export class OfflineSimulator {
           'GPS lost, dead reckoning active',
           peersHit ? 'Peers in same area degraded: localized interference' : 'Peers nominal: drone-level fault',
         );
+      }
+      const mv = meshView.get(d.id);
+      if (mv && mv.score !== null) {
+        // Peers measured their range to this drone by radio: that beats comparing GPS positions.
+        consensus = mv.score;
+        const why = describeMesh(mv);
+        if (why) reasons.push(why);
+      } else if (spoofed) {
+        reasons.push('Neighbor consensus mismatch (diverged from patrol formation)');
       }
       if (sats < 6 && !spoofed && !jammed) reasons.push('Low satellite count');
       const link = Math.max(0, Math.min(100, rssi, 100 - drop * 2));
@@ -777,6 +802,7 @@ export class OfflineSimulator {
           drone_id: d.id, trust_score: score, trust_status: status, gps_score: gps, imu_score: imu,
           link_score: link, consensus_score: consensus, command_score: 100, uncertainty_radius_m: unc, reason,
         },
+        mesh: mv ?? null,
         last_updated: ts,
       };
     });
