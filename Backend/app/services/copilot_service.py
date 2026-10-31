@@ -24,7 +24,9 @@ Rules:
 - Answer in the language of the question (Romanian or English). Be concise: a few sentences or a short list. Use mission time (T+m:ss) when it helps the timeline.
 """
 
-CITATION_RE = re.compile(r"\[#(\d+)\]")
+# [#12], and the grouped forms models also write: [#12, #15], [ex. #12, #15].
+CITATION_GROUP_RE = re.compile(r"\[[^\]\n]*?#\d+[^\]\n]*\]")
+RECORD_ID_RE = re.compile(r"#(\d+)")
 MAX_RECORDS = 400
 MAX_HISTORY_TURNS = 6
 
@@ -190,7 +192,8 @@ class CopilotService:
 
         answer = (response.text or "").strip()
         known_ids = {int(e["id"]) for e in events}
-        cited = sorted({int(m) for m in CITATION_RE.findall(answer)} & known_ids)
+        found = {int(i) for g in CITATION_GROUP_RE.findall(answer) for i in RECORD_ID_RE.findall(g)}
+        cited = sorted(found & known_ids)
         return {"answer": answer, "cited_ids": cited, "refused": False, "model": model}
 
 

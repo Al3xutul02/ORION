@@ -14,27 +14,32 @@
         @if (m.role === 'user') {
           <p>{{ m.text }}</p>
         } @else {
-          <p>
-            @for (s of segments(m); track $index) {
-              @switch (s.kind) {
-                @case ('cite') {
-                  <button
-                    type="button"
-                    class="cite mono"
-                    [class.on]="isHighlighted(s.id)"
-                    [title]="'Show record #' + s.id + ' in the log'"
-                    (click)="store.highlightEvents([s.id])"
-                  >#{{ s.id }}</button>
+          <div class="md">
+            @for (b of blocks(m); track $index) {
+              @switch (b.kind) {
+                @case ('h') {
+                  <p class="h"><ng-container *ngTemplateOutlet="inline; context: { $implicit: b.content }" /></p>
                 }
-                @case ('fleet') {
-                  <span class="cite fleet mono" title="Live fleet snapshot, not part of the hash chain">fleet</span>
+                @case ('p') {
+                  <p><ng-container *ngTemplateOutlet="inline; context: { $implicit: b.content }" /></p>
                 }
-                @default {
-                  <span>{{ s.text }}</span>
+                @case ('ul') {
+                  <ul>
+                    @for (i of b.items; track $index) {
+                      <li [style.margin-left.px]="i.depth * 14"><ng-container *ngTemplateOutlet="inline; context: { $implicit: i.content }" /></li>
+                    }
+                  </ul>
+                }
+                @case ('ol') {
+                  <ol [start]="b.start">
+                    @for (i of b.items; track $index) {
+                      <li [style.margin-left.px]="i.depth * 14" [class.sub]="i.depth > 0"><ng-container *ngTemplateOutlet="inline; context: { $implicit: i.content }" /></li>
+                    }
+                  </ol>
                 }
               }
             }
-          </p>
+          </div>
           @if (m.citedIds?.length) {
             <div class="foot">
               <button type="button" class="link" (click)="store.highlightEvents(m.citedIds!)">
@@ -63,6 +68,33 @@
       <div class="msg assistant thinking"><span class="dots" aria-label="Thinking"><i></i><i></i><i></i></span></div>
     }
   </div>
+
+  <ng-template #inline let-content>
+    @for (s of content; track $index) {
+      @switch (s.kind) {
+        @case ('cite') {
+          <button
+            type="button"
+            class="cite mono"
+            [class.on]="isHighlighted(s.id)"
+            [title]="'Show record #' + s.id + ' in the log'"
+            (click)="store.highlightEvents([s.id])"
+          >#{{ s.id }}</button>
+        }
+        @case ('fleet') {
+          <span class="cite fleet mono" title="Live fleet snapshot, not part of the hash chain">fleet</span>
+        }
+        @case ('br') { <br /> }
+        @default {
+          @if (s.code) {
+            <code [class.b]="s.bold" [class.i]="s.italic">{{ s.text }}</code>
+          } @else {
+            <span [class.b]="s.bold" [class.i]="s.italic">{{ s.text }}</span>
+          }
+        }
+      }
+    }
+  </ng-template>
 
   <form class="ask" (submit)="$event.preventDefault(); send()">
     <textarea

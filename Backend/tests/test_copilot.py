@@ -146,3 +146,10 @@ def test_overloaded_model_falls_back(client, monkeypatch):
     data = ask(client).json()
     assert [c["model"] for c in models.calls] == [settings.COPILOT_MODEL, settings.COPILOT_FALLBACK_MODEL]
     assert data["model"] == settings.COPILOT_FALLBACK_MODEL and data["cited_ids"] == [2]
+
+
+def test_grouped_citations_are_validated_too():
+    from app.services.copilot_service import CITATION_GROUP_RE, RECORD_ID_RE
+    answer = "Spoofing [ex. #55, #113] and [#7], not [step 2] or #9."
+    found = [int(i) for g in CITATION_GROUP_RE.findall(answer) for i in RECORD_ID_RE.findall(g)]
+    assert found == [55, 113, 7]

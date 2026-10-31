@@ -1,8 +1,8 @@
+import { NgTemplateOutlet } from '@angular/common';
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { Block, parseMarkdown } from '../../core/chat-markdown';
 import { CopilotMessage } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
-
-type Segment = { kind: 'text'; text: string } | { kind: 'cite'; id: number } | { kind: 'fleet' };
 
 const SUGGESTIONS = {
   offline: [
@@ -21,6 +21,7 @@ const SUGGESTIONS = {
 
 @Component({
   selector: 'app-copilot-panel',
+  imports: [NgTemplateOutlet],
   templateUrl: './copilot-panel.html',
   styleUrl: './copilot-panel.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -55,15 +56,16 @@ export class CopilotPanel {
     }
   }
 
-  /** Splits an answer into text and clickable citations. Only ids the backend validated become links. */
-  protected segments(m: CopilotMessage): Segment[] {
-    const valid = new Set(m.citedIds ?? []);
-    return m.text.split(/(\[#\d+\]|\[fleet\])/).filter(Boolean).map((part): Segment => {
-      const cite = /^\[#(\d+)\]$/.exec(part);
-      if (cite && valid.has(Number(cite[1]))) return { kind: 'cite', id: Number(cite[1]) };
-      if (part === '[fleet]') return { kind: 'fleet' };
-      return { kind: 'text', text: part };
-    });
+  private parsed = new WeakMap<CopilotMessage, Block[]>();
+
+  /** The answer's Markdown as blocks with clickable citations; only ids the backend validated become links. */
+  protected blocks(m: CopilotMessage): Block[] {
+    let b = this.parsed.get(m);
+    if (!b) {
+      b = parseMarkdown(m.text, new Set(m.citedIds ?? []));
+      this.parsed.set(m, b);
+    }
+    return b;
   }
 
   protected isHighlighted(id: number): boolean {
