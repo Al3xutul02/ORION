@@ -1,4 +1,5 @@
-import { MIN_RATE_FACTOR, TAU, slotErrors, spacingRates } from './patrol';
+import { MIN_RATE_FACTOR, TAU, holdPoint, slotErrors, spacingRates } from './patrol';
+import { distanceM } from './geo';
 import { OfflineSimulator } from './offline-simulator';
 
 // Same cases as Backend/tests/test_patrol.py, so the two implementations stay in step.
@@ -54,5 +55,34 @@ describe('patrol spacing in the Demo simulator', () => {
     const rebalance = sim.ledger.events.filter(e => e.event_type === 'PATROL_REBALANCED');
     expect(rebalance.length).toBe(1);
     expect(rebalance[0].drone_id).toBe(4);
+  });
+});
+
+describe('holding off the patrol orbit', () => {
+  const o = { center: { lat: 44.335, lon: 23.83 }, orbit: { lat: 0.003, lon: 0.004 } };
+  const r = ([lat, lon]: [number, number]) => Math.hypot((lat - o.center.lat) / o.orbit.lat, (lon - o.center.lon) / o.orbit.lon);
+
+  it('steps outward, else inward, else nowhere; ignores drones already off the orbit', () => {
+    const on: [number, number] = [o.center.lat, o.center.lon + o.orbit.lon];
+    expect(r(holdPoint(...on, o, () => true)!)).toBeCloseTo(1.5, 9);
+    expect(r(holdPoint(...on, o, (la, lo) => r([la, lo]) < 1)!)).toBeCloseTo(0.5, 9);
+    expect(holdPoint(...on, o, () => false)).toBeNull();
+    expect(holdPoint(o.center.lat, o.center.lon + 0.2 * o.orbit.lon, o, () => true)).toBeNull();
+  });
+
+  it('keeps the patrol from flying through a loitering drone in the Demo', () => {
+    const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
+    expect(sim.command(4, 'LOITER', 'TEST').ok).toBeTrue();
+    const drones = (sim as unknown as { drones: { id: number; lat: number; lon: number; altitude: number }[] }).drones;
+    for (let t = 0; t < 30; t++) sim.advance(0.5); // 15 s to step out
+    const d4 = drones.find(d => d.id === 4)!;
+    expect(r([d4.lat, d4.lon])).toBeCloseTo(1.5, 2);
+    expect(d4.altitude).toBe(120);
+    let closest = Infinity;
+    for (let t = 0; t < 120; t++) {
+      sim.advance(0.5);
+      for (const d of drones.filter(x => x.id <= 3)) closest = Math.min(closest, distanceM(d.lat, d.lon, d4.lat, d4.lon));
+    }
+    expect(closest).toBeGreaterThan(120);
   });
 });

@@ -7,7 +7,7 @@ are equal again; drones never fly faster than the normal orbit speed, so the INS
 check never sees an impossible jump. Mirrored in Frontend/src/app/core/patrol.ts.
 """
 import math
-from typing import Dict
+from typing import Callable, Dict, Optional, Tuple
 
 TAU = 2 * math.pi
 MIN_RATE_FACTOR = 0.4  # a drone waits for its slot at no less than 40% of orbit speed
@@ -47,3 +47,33 @@ def spacing_rates(angles: Dict[int, float], base_rate: float) -> Dict[int, float
 def max_spacing_error_deg(angles: Dict[int, float]) -> float:
     errs = slot_errors(angles).values()
     return math.degrees(max((abs(e) for e in errs), default=0.0))
+
+
+# ---- Holding off the orbit ------------------------------------------------------------------
+# A drone told to LOITER on the orbit would sit in the path of the drones still patrolling it.
+# It steps out of the way first: about 160 m outside the orbit (or inside, if outside isn't
+# clear), and if neither is clear it holds where it is but climbs for vertical separation.
+
+NEAR_ORBIT = 0.3       # within 30% of the orbit radius counts as "on the orbit"
+HOLD_CLEARANCE = 0.5   # step out to 150% (or in to 50%) of the orbit radius, ~160 m
+HOLD_CLIMB_M = 30.0    # vertical separation when there is nowhere clear to step out to
+
+
+def hold_point(lat: float, lon: float, center: Tuple[float, float], radii: Tuple[float, float],
+               is_clear: Callable[[float, float], bool]) -> Optional[Tuple[float, float]]:
+    """Where a drone at (lat, lon) should hold so it is off the orbit; None = already clear of it
+    or nowhere safe to go (the caller then separates vertically if it is on the orbit)."""
+    (c_lat, c_lon), (r_lat, r_lon) = center, radii
+    r = math.hypot((lat - c_lat) / r_lat, (lon - c_lon) / r_lon)
+    if abs(r - 1.0) >= NEAR_ORBIT or r < 1e-9:
+        return None
+    for target in (1.0 + HOLD_CLEARANCE, 1.0 - HOLD_CLEARANCE):
+        p = (c_lat + (lat - c_lat) / r * target, c_lon + (lon - c_lon) / r * target)
+        if is_clear(*p):
+            return p
+    return None
+
+
+def on_orbit(lat: float, lon: float, center: Tuple[float, float], radii: Tuple[float, float]) -> bool:
+    (c_lat, c_lon), (r_lat, r_lon) = center, radii
+    return abs(math.hypot((lat - c_lat) / r_lat, (lon - c_lon) / r_lon) - 1.0) < NEAR_ORBIT

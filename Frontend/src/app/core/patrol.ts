@@ -32,3 +32,36 @@ export function spacingRates(angles: Map<number, number>, baseRate: number): Map
     [...slotErrors(angles)].map(([i, err]) => [i, baseRate * Math.max(MIN_RATE_FACTOR, 1 - GAIN * Math.max(0, err))]),
   );
 }
+
+// ---- Holding off the orbit -------------------------------------------------------------------
+// A drone told to LOITER on the orbit would sit in the path of the drones still patrolling it.
+// It steps out of the way first: about 160 m outside the orbit (or inside, if outside isn't
+// clear), and if neither is clear it holds where it is but climbs for vertical separation.
+
+const NEAR_ORBIT = 0.3; // within 30% of the orbit radius counts as "on the orbit"
+const HOLD_CLEARANCE = 0.5; // step out to 150% (or in to 50%) of the orbit radius, ~160 m
+export const HOLD_CLIMB_M = 30; // vertical separation when there is nowhere clear to step out to
+
+export interface Orbit {
+  center: { lat: number; lon: number };
+  orbit: { lat: number; lon: number };
+}
+
+const orbitR = (lat: number, lon: number, o: Orbit) =>
+  Math.hypot((lat - o.center.lat) / o.orbit.lat, (lon - o.center.lon) / o.orbit.lon);
+
+export const isOnOrbit = (lat: number, lon: number, o: Orbit) => Math.abs(orbitR(lat, lon, o) - 1) < NEAR_ORBIT;
+
+/** Where a drone should hold so it is off the orbit; null = already clear of it, or nowhere safe to go. */
+export function holdPoint(lat: number, lon: number, o: Orbit, isClear: (lat: number, lon: number) => boolean): [number, number] | null {
+  const r = orbitR(lat, lon, o);
+  if (Math.abs(r - 1) >= NEAR_ORBIT || r < 1e-9) return null;
+  for (const target of [1 + HOLD_CLEARANCE, 1 - HOLD_CLEARANCE]) {
+    const p: [number, number] = [
+      o.center.lat + ((lat - o.center.lat) / r) * target,
+      o.center.lon + ((lon - o.center.lon) / r) * target,
+    ];
+    if (isClear(...p)) return p;
+  }
+  return null;
+}

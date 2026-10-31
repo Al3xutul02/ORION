@@ -1,7 +1,7 @@
 import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { computeMesh, describeMesh } from './mesh';
-import { spacingRates } from './patrol';
+import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 
@@ -25,6 +25,7 @@ const SECTORS: Record<'A' | 'B', Sector> = {
 const ANGULAR_SPEED = 0.08; // rad/s
 const SPOOF_OFFSET = { lat: 0.0042, lon: 0.0038 };
 const EGRESS_SPEED_MS = 22;
+const CRUISE_ALT_M = 120;
 
 // Hostile mobile EW emitter: enters from the south-east, crosses Sector 4, withdraws into Bravo.
 const JAMMER = {
@@ -80,6 +81,10 @@ interface SimDrone {
   weatherAlert: number | null; // id of the over-limit weather zone already reported
   onOrbit: boolean; // flying the patrol orbit (not still on the way to it)
   patrolRate: number; // rad/s around the orbit, set by the spacing coordinator (core/patrol.ts)
+  /** Where a loitering drone holds off the orbit: undefined = not decided yet, null = in place. */
+  holdPoint?: [number, number] | null;
+  repositioning: boolean;
+  altitude: number;
 }
 
 interface Jammer {
@@ -143,6 +148,7 @@ export class OfflineSimulator {
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
       safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
       batteryUsed: 0, weatherAlert: null, onOrbit: true, patrolRate: ANGULAR_SPEED,
+      repositioning: false, altitude: CRUISE_ALT_M,
     }));
     this.patrolMembers = new Map(
       Object.values(SECTORS).map(s => [s.name, new Set(this.drones.filter(d => d.sector === s).map(d => d.id))]),
@@ -640,6 +646,34 @@ export class OfflineSimulator {
     }
   }
 
+  /** A loitering drone steps out of the patrol orbit's path (core/patrol.ts), at patrol speed. */
+  private holdOffOrbit(d: SimDrone, dt: number): void {
+    if (d.holdPoint === undefined) {
+      // Hazards the drone is already inside don't count: it is leaving them anyway.
+      const zones = hazardZones(this.zones).filter(z => distanceM(d.lat, d.lon, z.center![0], z.center![1]) > z.radius_m!);
+      const clear = (lat: number, lon: number) =>
+        !zones.some(z => segmentIntersectsCircle(d.lat, d.lon, lat, lon, z.center![0], z.center![1], z.radius_m!));
+      d.holdPoint = holdPoint(d.lat, d.lon, d.sector, clear);
+      if (d.holdPoint === null && isOnOrbit(d.lat, d.lon, d.sector)) d.altitude = CRUISE_ALT_M + HOLD_CLIMB_M;
+    }
+    if (!d.holdPoint || dt === 0) {
+      d.repositioning = false;
+      return;
+    }
+    const [tLat, tLon] = d.holdPoint;
+    const dist = distanceM(d.lat, d.lon, tLat, tLon);
+    const budget = (EGRESS_SPEED_MS / 2) * dt; // patrol speed: no reason to rush
+    if (dist <= budget) {
+      d.lat = tLat;
+      d.lon = tLon;
+      d.repositioning = false;
+    } else {
+      d.lat += ((tLat - d.lat) * budget) / dist;
+      d.lon += ((tLon - d.lon) * budget) / dist;
+      d.repositioning = true;
+    }
+  }
+
   /** Keeps each sector's orbit evenly spaced; logs when a drone joins or leaves it. */
   private coordinatePatrol(): void {
     const members = new Map<string, Set<number>>();
@@ -673,7 +707,12 @@ export class OfflineSimulator {
   }
 
   private move(d: SimDrone, dt: number): void {
+    if (d.mode !== 'LOITER') {
+      d.holdPoint = undefined;
+      d.repositioning = false;
+    }
     if (d.mode === 'PATROL') {
+      d.altitude = CRUISE_ALT_M;
       const { center, orbit } = d.sector;
       const targetLat = center.lat + orbit.lat * Math.sin(d.angle);
       const targetLon = center.lon + orbit.lon * Math.cos(d.angle);
@@ -693,7 +732,11 @@ export class OfflineSimulator {
       return;
     }
     if (d.mode === 'LOITER') {
-      if (d.egressPath.length && this.elapsed >= d.loiterUntil) d.mode = 'EGRESS';
+      if (d.egressPath.length && this.elapsed >= d.loiterUntil) {
+        d.mode = 'EGRESS';
+        return;
+      }
+      this.holdOffOrbit(d, dt);
       return;
     }
     if (d.mode === 'EGRESS' && d.route === 'ROUTE' && this.routeLegBlocked(d)) {
@@ -830,8 +873,8 @@ export class OfflineSimulator {
 
       const flightMode = d.mode === 'PATROL' ? 'GUIDED' : d.mode === 'EGRESS' ? d.route : d.mode;
       return {
-        drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : 120,
-        ground_speed: d.mode === 'PATROL' ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,
+        drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : d.altitude,
+        ground_speed: d.mode === 'PATROL' || d.repositioning ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,
         heading: ((d.angle * 180) / Math.PI + 90) % 360,
         fix_type: fix, satellites_visible: sats, eph,
         battery_remaining: Math.round(Math.max(20, 100 - d.batteryUsed) * 10) / 10,

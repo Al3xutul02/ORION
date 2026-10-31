@@ -19,6 +19,8 @@ logger = logging.getLogger("orion.simulator")
 
 EGRESS_SPEED_DEG_PER_SEC = 0.00022  # ~24 m/s in lat/lon degrees
 PATROL_ANGULAR_SPEED = 0.08  # rad/s around the orbit; patrol.py only ever slows a drone below it
+PATROL_RADIUS_LAT = 0.003    # orbit half-axes in degrees (~330 m x ~320 m)
+PATROL_RADIUS_LON = 0.004
 
 
 class OrionFleetSimulator:
@@ -125,6 +127,8 @@ class OrionFleetSimulator:
         rep_lat, rep_lon = self._reported_position(d_data)
         flight_mode = "GUIDED" if mode == "PATROL" else mode
         speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL", "ROUTE") else d_data.get("speed", 12.0))
+        if mode == "LOITER" and d_data.get("repositioning"):
+            speed = 12.0  # stepping off the patrol orbit before it holds
 
         fix_type = 3
         sats = 12
@@ -611,9 +615,15 @@ class OrionFleetSimulator:
                 d_data["spoof_offset"] = (0.0, 0.0)
             return
 
+        if mode != "LOITER":
+            d_data.pop("hold_point", None)
+            d_data["repositioning"] = False
+
         if mode == "LOITER":
             if d_data["egress_waypoints"] and self.elapsed_time >= d_data["loiter_until"]:
                 d_data["mode"] = "CORRIDOR"
+                return
+            self._hold_off_orbit(d_data, dt)
             return
 
         if mode == "ROUTE" and d_data["egress_waypoints"] and self._route_leg_blocked(d_data):
@@ -681,9 +691,10 @@ class OrionFleetSimulator:
 
         # PATROL mode: the drone holds its orbit physically (true frame); spoofing only
         # shifts what it reports, which is applied in _reported_position().
+        d_data["alt"] = self.sector_center["alt"]
         angular_speed = PATROL_ANGULAR_SPEED
-        patrol_radius_lat = 0.003
-        patrol_radius_lon = 0.004
+        patrol_radius_lat = PATROL_RADIUS_LAT
+        patrol_radius_lon = PATROL_RADIUS_LON
 
         target_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
         target_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
@@ -705,6 +716,46 @@ class OrionFleetSimulator:
             d_data["lat"] = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
             d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
+
+    def _hold_off_orbit(self, d_data: Dict[str, Any], dt: float):
+        """A loitering drone steps out of the patrol orbit's path (patrol.hold_point), at patrol speed."""
+        center = (self.sector_center["lat"], self.sector_center["lon"])
+        radii = (PATROL_RADIUS_LAT, PATROL_RADIUS_LON)
+        if "hold_point" not in d_data:  # decided once, when the drone starts holding
+            d_data["hold_point"] = patrol.hold_point(d_data["lat"], d_data["lon"], center, radii, self._hold_is_clear(d_data))
+            if d_data["hold_point"] is None and patrol.on_orbit(d_data["lat"], d_data["lon"], center, radii):
+                d_data["alt"] = self.sector_center["alt"] + patrol.HOLD_CLIMB_M
+        target = d_data["hold_point"]
+        if target is None:
+            d_data["repositioning"] = False
+            return
+        dlat, dlon = target[0] - d_data["lat"], target[1] - d_data["lon"]
+        dist_deg = math.hypot(dlat, dlon)
+        step = EGRESS_SPEED_DEG_PER_SEC / 2 * dt  # patrol speed: no reason to rush
+        if dist_deg <= step:
+            d_data["lat"], d_data["lon"] = target
+            d_data["repositioning"] = False
+        else:
+            d_data["lat"] += dlat / dist_deg * step
+            d_data["lon"] += dlon / dist_deg * step
+            d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
+            d_data["repositioning"] = True
+
+    def _hold_is_clear(self, d_data: Dict[str, Any]):
+        """A hold point is clear if it is outside every hazard and the way there crosses none
+        (hazards the drone is already inside don't count, it is leaving them anyway)."""
+        lat, lon = d_data["lat"], d_data["lon"]
+        zones = [
+            z for z in theatre_rules.blocking_zones()
+            if z.get("geometry_type") == "CIRCLE"
+            and haversine_distance_m(lat, lon, *z["center"]) > z["radius_m"]
+        ]
+
+        def clear(t_lat: float, t_lon: float) -> bool:
+            return not any(
+                line_segment_intersects_circle(lat, lon, t_lat, t_lon, *z["center"], z["radius_m"]) for z in zones
+            )
+        return clear
 
     def _coordinate_patrol(self, db):
         """Keeps the drones on the orbit evenly spaced; logs when one joins or leaves it."""

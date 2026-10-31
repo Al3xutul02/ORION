@@ -69,3 +69,65 @@ def test_simulator_respaces_the_orbit_and_logs_who_left():
     on_orbit = {i: sim.drones[i]["offset_angle"] for i in (1, 2, 3)}
     assert all(abs(g - 120) < 3 for g in gaps_deg(on_orbit))
     assert all(sim.drones[i]["patrol_rate"] <= PATROL_ANGULAR_SPEED for i in (1, 2, 3))
+
+
+CENTER, RADII = (44.335, 23.83), (0.003, 0.004)
+
+
+def orbit_r(lat, lon):
+    return math.hypot((lat - CENTER[0]) / RADII[0], (lon - CENTER[1]) / RADII[1])
+
+
+def test_hold_point_steps_off_the_orbit_outward_then_inward_then_nowhere():
+    on = (CENTER[0], CENTER[1] + RADII[1])  # east point of the orbit
+    out = patrol.hold_point(*on, CENTER, RADII, lambda la, lo: True)
+    assert abs(orbit_r(*out) - 1.5) < 1e-9
+    inward = patrol.hold_point(*on, CENTER, RADII, lambda la, lo: orbit_r(la, lo) < 1)
+    assert abs(orbit_r(*inward) - 0.5) < 1e-9
+    assert patrol.hold_point(*on, CENTER, RADII, lambda la, lo: False) is None
+    assert patrol.hold_point(CENTER[0], CENTER[1] + 0.2 * RADII[1], CENTER, RADII, lambda la, lo: True) is None
+
+
+def run_ticks(sim, seconds, dt=0.5, each=None):
+    with SessionLocal() as db:
+        for _ in range(int(seconds / dt)):
+            sim._coordinate_patrol(db)
+            for d_id, d in sim.drones.items():
+                sim._move_drone(db, d_id, d, dt)
+            if each:
+                each()
+
+
+def test_loitering_drone_steps_out_of_the_patrol_path(monkeypatch):
+    from app.services.simulator import theatre_rules
+    from app.services.trust_evaluator import haversine_distance_m
+    monkeypatch.setattr(theatre_rules, "blocking_zones", lambda: [])
+    sim = OrionFleetSimulator()
+    sim.execute_drone_action(4, "LOITER")
+    run_ticks(sim, 15)
+    d4 = sim.drones[4]
+    assert abs(orbit_r(d4["lat"], d4["lon"]) - 1.5) < 0.01 and not d4["repositioning"]
+    assert sim.get_telemetry(4)["ground_speed"] == 0.0 and d4["alt"] == 120.0
+
+    closest = []
+    run_ticks(sim, 90, each=lambda: closest.append(min(
+        haversine_distance_m(d4["lat"], d4["lon"], sim.drones[i]["lat"], sim.drones[i]["lon"]) for i in (1, 2, 3)
+    )))
+    assert min(closest) > 120  # the patrol never passes through the holding drone
+
+
+def test_loitering_drone_climbs_when_there_is_nowhere_clear_to_step_out(monkeypatch):
+    from app.services.simulator import theatre_rules
+    d4_start = (44.332, 23.83)  # south point of the orbit
+    monkeypatch.setattr(theatre_rules, "blocking_zones", lambda: [
+        {"geometry_type": "CIRCLE", "center": [44.3315, 23.83], "radius_m": 40.0},  # just outside D4
+        {"geometry_type": "CIRCLE", "center": [44.3335, 23.83], "radius_m": 40.0},  # just inside
+    ])
+    sim = OrionFleetSimulator()
+    sim.execute_drone_action(4, "LOITER")
+    run_ticks(sim, 5)
+    d4 = sim.drones[4]
+    assert (round(d4["lat"], 6), round(d4["lon"], 6)) == d4_start and d4["alt"] == 150.0
+    sim.execute_drone_action(4, "CONTINUE_PATROL")
+    run_ticks(sim, 1)
+    assert d4["alt"] == 120.0
