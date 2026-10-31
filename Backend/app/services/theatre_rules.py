@@ -615,6 +615,29 @@ class TheatreRulesEngine:
         self.zones.append(zone)
         return zone
 
+    def add_objective_zone(
+        self,
+        name: Optional[str],
+        waypoints: List[List[float]]
+    ) -> Dict[str, Any]:
+        """Creates a new operator-defined OBJECTIVE polygonal zone on the map."""
+        if not name or not name.strip():
+            count = len([z for z in self.zones if z.get("is_active", True) and z.get("zone_type") == "OBJECTIVE"])
+            greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+            label = greek[count] if count < len(greek) else f"Area-{count + 1}"
+            name = f"Objective Zone {label}"
+        zone = {
+            "id": self._alloc_id(),
+            "name": name.strip(),
+            "zone_type": "OBJECTIVE",
+            "geometry_type": "POLYGON",
+            "waypoints": [[round(pt[0], 5), round(pt[1], 5)] for pt in waypoints],
+            "is_active": True,
+            "detected_by": "OPERATOR"
+        }
+        self.zones.append(zone)
+        return zone
+
     def apply_patrol_tactic(self, zone_id: int, tactic: str) -> Dict[str, Any]:
         """
         Applies a tactical swarm maneuver to a patrol zone:

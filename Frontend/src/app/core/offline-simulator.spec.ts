@@ -61,4 +61,16 @@ describe('OfflineSimulator (extended exercise)', () => {
     const deleted = sim.deleteZone(pz.id);
     expect(deleted).toBeTrue();
   });
+
+  it('supports creating and deleting objective zones', () => {
+    const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
+    const oz = sim.addObjectiveZone('Objective Zone Alpha', [[44.31, 23.80], [44.32, 23.82], [44.30, 23.83]]);
+    expect(oz.id).toBeGreaterThan(100);
+    expect(oz.name).toBe('Objective Zone Alpha');
+    expect(oz.zone_type).toBe('OBJECTIVE');
+    expect(oz.waypoints?.length).toBe(3);
+
+    const deleted = sim.deleteZone(oz.id);
+    expect(deleted).toBeTrue();
+  });
 });

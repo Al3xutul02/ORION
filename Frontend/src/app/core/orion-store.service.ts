@@ -3,7 +3,7 @@ import { ORION_CONFIG } from './config';
 import { ActionOption, distanceM, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
-  AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
+  AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, MapMode, Recommendation, SocketMessage, Zone,
 } from './models';
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
@@ -91,11 +91,11 @@ export class OrionStore implements OnDestroy {
   readonly copilotBusy = signal(false);
   /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
   readonly highlightedEvents = signal<number[]>([]);
-  readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
+  readonly mapMode = signal<MapMode>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
   readonly commandScope = signal<'drone' | 'zone'>('drone');
 
-  setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
+  setMapMode(mode: MapMode): void {
     this.mapMode.set(mode);
   }
 
@@ -487,6 +487,19 @@ export class OrionStore implements OnDestroy {
     const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints }));
     if (res) {
       this.pushToast('ok', 'Safe corridor opened', `${res.name} (${waypoints.length} waypoints) established`);
+    }
+    this.pollLive();
+  }
+
+  async createObjectiveZone(name: string, waypoints: [number, number][]): Promise<void> {
+    if (this.offline) {
+      this.offline.addObjectiveZone(name, waypoints);
+      this.pushToast('ok', 'Objective zone created', `${name} (${waypoints.length} vertices) established`);
+      return;
+    }
+    const res = await this.call(() => this.api.createObjectiveZone({ name, waypoints }));
+    if (res) {
+      this.pushToast('ok', 'Objective zone created', `${res.name} (${waypoints.length} vertices) established`);
     }
     this.pollLive();
   }

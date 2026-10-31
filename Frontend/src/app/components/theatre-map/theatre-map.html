@@ -1,7 +1,7 @@
 <div
   class="map"
   #map
-  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'pick_loiter'"
+  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'create_objective' || store.mapMode() === 'pick_loiter'"
   [class.mode-delete]="store.mapMode() === 'delete_zone'"
 ></div>
 
@@ -27,9 +27,20 @@
       >
         &#10003; Finish Corridor ({{ corridorPoints.length }})
       </button>
+    } @else if (store.mapMode() === 'create_objective') {
+      <span class="mode-icon objective">&#9670;</span>
+      <span class="mode-text">Click vertices on map ({{ objectivePoints.length }} points added). Double-click or click Finish (min 3 points).</span>
+      <button
+        type="button"
+        class="btn-finish-corridor"
+        [disabled]="objectivePoints.length < 3"
+        (click)="finishObjective()"
+      >
+        &#10003; Finish Objective ({{ objectivePoints.length }})
+      </button>
     } @else if (store.mapMode() === 'delete_zone') {
       <span class="mode-icon">&#10005;</span>
-      <span class="mode-text">Click on any tactical zone (patrol, threat, corridor) to delete it</span>
+      <span class="mode-text">Click on any tactical zone (patrol, threat, corridor, objective) to delete it</span>
     } @else if (store.mapMode() === 'pick_loiter') {
       <span class="mode-icon">&#9678;</span>
       <span class="mode-text">Click on map to select loiter destination</span>
@@ -42,6 +53,7 @@
   <span><i class="sw base"></i>Base</span>
   <span><i class="sw patrol"></i>Patrol zone</span>
   <span><i class="sw corridor"></i>Safe corridor</span>
+  <span><i class="sw objective"></i>Objective zone</span>
   <span><i class="sw interference"></i>Interference</span>
   <span><i class="sw threat"></i>Threat</span>
   <span><i class="sw weather"></i>Weather</span>
@@ -77,6 +89,15 @@
       title="Create new safe corridor by clicking waypoints"
     >
       + Safe Corridor
+    </button>
+    <button
+      type="button"
+      class="btn sm tool-btn objective-btn"
+      [class.active]="store.mapMode() === 'create_objective'"
+      (click)="toggleMapMode('create_objective')"
+      title="Create new polygonal objective zone by clicking vertices"
+    >
+      + Objective Zone
     </button>
     <button
       type="button"

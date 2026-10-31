@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.aar_service import aar_service
-from app.schemas.zone import CreatePatrolZoneRequest, CreateThreatZoneRequest, CreateSafeCorridorRequest, ExecuteZoneTacticRequest
+from app.schemas.zone import CreatePatrolZoneRequest, CreateThreatZoneRequest, CreateSafeCorridorRequest, CreateObjectiveZoneRequest, ExecuteZoneTacticRequest
 from app.services.theatre_rules import theatre_rules
 from app.schemas.zone import TacticalZoneResponse
 
@@ -66,20 +66,39 @@ def get_zones_geojson():
                 })
         elif g_type == "POLYGON":
             coords = [[pt[1], pt[0]] for pt in z.get("waypoints", [])]
-            features.append({
-                "type": "Feature",
-                "properties": {
-                    "id": z["id"],
-                    "name": name,
-                    "zone_type": z_type,
-                    "is_active": z.get("is_active", True),
-                    "detected_by": z.get("detected_by", "PRECONFIGURED")
-                },
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": coords
-                }
-            })
+            if z_type == "OBJECTIVE":
+                poly_coords = list(coords)
+                if poly_coords and poly_coords[0] != poly_coords[-1]:
+                    poly_coords.append(poly_coords[0])
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "id": z["id"],
+                        "name": name,
+                        "zone_type": z_type,
+                        "is_active": z.get("is_active", True),
+                        "detected_by": z.get("detected_by", "PRECONFIGURED")
+                    },
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [poly_coords]
+                    }
+                })
+            else:
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "id": z["id"],
+                        "name": name,
+                        "zone_type": z_type,
+                        "is_active": z.get("is_active", True),
+                        "detected_by": z.get("detected_by", "PRECONFIGURED")
+                    },
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coords
+                    }
+                })
 
     return {
         "type": "FeatureCollection",
@@ -176,6 +195,27 @@ def create_safe_corridor(payload: CreateSafeCorridorRequest, db: Session = Depen
         drone_id=None,
         details={
             "corridor_id": zone["id"],
+            "name": zone["name"],
+            "waypoints": zone["waypoints"]
+        },
+        operator_id="OPERATOR_1"
+    )
+    return zone
+
+
+@router.post("/objective")
+def create_objective_zone(payload: CreateObjectiveZoneRequest, db: Session = Depends(get_db)):
+    """Creates a new operator-defined polygonal objective zone on the map."""
+    zone = theatre_rules.add_objective_zone(
+        name=payload.name,
+        waypoints=payload.waypoints
+    )
+    aar_service.log_event(
+        db=db,
+        event_type="OBJECTIVE_ZONE_DECLARED",
+        drone_id=None,
+        details={
+            "zone_id": zone["id"],
             "name": zone["name"],
             "waypoints": zone["waypoints"]
         },

@@ -88,6 +88,10 @@ export class OrionApi {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/corridor`, body));
   }
 
+  createObjectiveZone(body: { name?: string; waypoints: [number, number][] }) {
+    return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/objective`, body));
+  }
+
   executeZoneTactic(body: { zone_id: number; tactic: string }) {
     return firstValueFrom(this.http.post<{ status: string; zone_id: number; tactic: string }>(`${this.base}/zones/tactic`, body));
   }

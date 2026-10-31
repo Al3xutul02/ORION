@@ -40,6 +40,38 @@ def test_create_and_delete_patrol_zone_api():
     assert theatre_rules.get_zone(zone_id) is None
 
 
+def test_create_and_delete_objective_zone_api():
+    """Operator can create, render as GeoJSON polygon, and delete an objective zone."""
+    res = client.post("/api/v1/zones/objective", json={
+        "name": "Objective Sector Alpha",
+        "waypoints": [[44.3300, 23.8200], [44.3400, 23.8300], [44.3350, 23.8400]]
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Objective Sector Alpha"
+    assert data["zone_type"] == "OBJECTIVE"
+    assert data["geometry_type"] == "POLYGON"
+    assert len(data["waypoints"]) == 3
+    zone_id = data["id"]
+
+    # Verify geojson produces a closed Polygon
+    geo_res = client.get("/api/v1/zones/geojson")
+    assert geo_res.status_code == 200
+    features = geo_res.json()["features"]
+    obj_feat = next((f for f in features if f["properties"]["id"] == zone_id), None)
+    assert obj_feat is not None
+    assert obj_feat["geometry"]["type"] == "Polygon"
+    # Closed ring: first and last coords are identical
+    coords = obj_feat["geometry"]["coordinates"][0]
+    assert coords[0] == coords[-1]
+
+    # Delete zone
+    del_res = client.delete(f"/api/v1/zones/{zone_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["status"] == "DELETED"
+    assert theatre_rules.get_zone(zone_id) is None
+
+
 def test_safe_vs_risky_pathfinding():
     """
     Safe path strictly avoids interference & threat zones.

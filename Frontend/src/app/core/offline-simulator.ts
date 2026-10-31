@@ -256,6 +256,24 @@ export class OfflineSimulator {
     return zone;
   }
 
+  addObjectiveZone(name: string, waypoints: [number, number][]): Zone {
+    const count = this.zones.filter(z => z.zone_type === 'OBJECTIVE' && z.is_active).length;
+    const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
+    const label = greek[count] ?? `Sector-${count + 1}`;
+    const zone: Zone = {
+      id: 500 + this.zones.length,
+      name: name || `Objective Zone ${label}`,
+      zone_type: 'OBJECTIVE',
+      geometry_type: 'POLYGON',
+      waypoints: waypoints.map(pt => [pt[0], pt[1]]),
+      is_active: true,
+      detected_by: 'OPERATOR',
+    };
+    this.zones = [...this.zones, zone];
+    this.log('OBJECTIVE_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints }, 'OPERATOR_1');
+    return zone;
+  }
+
   executeZoneTactic(zoneId: number, tactic: string, operatorId = 'OPERATOR_1'): { ok: boolean; message: string } {
     const pz = this.zones.find(z => z.id === zoneId && z.zone_type === 'PATROL');
     if (!pz) return { ok: false, message: 'Patrol zone not found.' };

@@ -16,6 +16,7 @@ const ZONE_COLORS: Record<string, string> = {
   THREAT: '#ff5463',
   WEATHER: '#b48cff',
   PATROL: '#00d4ff',
+  OBJECTIVE: '#f59e0b',
 };
 const STATUS_COLORS: Record<string, string> = { GREEN: '#3ddc84', YELLOW: '#f5c542', RED: '#ff5463' };
 
@@ -59,6 +60,7 @@ export class TheatreMap implements OnDestroy {
   private isDrawingZone = false;
   private drawCenter: [number, number] | null = null;
   protected corridorPoints: [number, number][] = [];
+  protected objectivePoints: [number, number][] = [];
 
   constructor() {
     afterNextRender(() => this.init());
@@ -240,6 +242,17 @@ export class TheatreMap implements OnDestroy {
       paint: { 'line-color': '#3ddc84', 'line-width': 2, 'line-dasharray': [4, 3] },
     });
 
+    map.addSource('preview-objective', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'preview-objective-fill', type: 'fill', source: 'preview-objective',
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.22 },
+    });
+    map.addLayer({
+      id: 'preview-objective-line', type: 'line', source: 'preview-objective',
+      paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [4, 3] },
+    });
+
     this.ready = true;
     this.renderZones(this.store.zones());
     this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
@@ -295,6 +308,18 @@ export class TheatreMap implements OnDestroy {
             geometry: { type: 'Polygon', coordinates: [circleRing(z.center[0], z.center[1], z.radius_m)] },
           });
         }
+      } else if (z.zone_type === 'OBJECTIVE' && z.waypoints?.length) {
+        const ring = z.waypoints.map(([la, lo]) => [lo, la]);
+        if (ring.length >= 3) {
+          if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) {
+            ring.push([ring[0][0], ring[0][1]]);
+          }
+          features.push({
+            type: 'Feature',
+            properties: { ...props, is_objective: true },
+            geometry: { type: 'Polygon', coordinates: [ring] },
+          });
+        }
       } else {
         features.push({
           type: 'Feature',
@@ -341,6 +366,14 @@ export class TheatreMap implements OnDestroy {
         anchorLngLat = [mid[1], mid[0]];
         anchorPos = 'left';
         offset = [14, 0];
+      } else if (z.zone_type === 'OBJECTIVE' && z.waypoints?.length) {
+        const lats = z.waypoints.map(p => p[0]);
+        const lons = z.waypoints.map(p => p[1]);
+        const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+        const avgLon = lons.reduce((a, b) => a + b, 0) / lons.length;
+        anchorLngLat = [avgLon, avgLat];
+        anchorPos = 'center';
+        offset = [0, 0];
       } else if (z.center) {
         anchorLngLat = [z.center[1], z.center[0]];
         anchorPos = 'center';
@@ -364,6 +397,8 @@ export class TheatreMap implements OnDestroy {
       el.className = `zone-label zone-${z.zone_type}`;
       if (z.zone_type === 'PATROL') {
         el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
+      } else if (z.zone_type === 'OBJECTIVE') {
+        el.innerHTML = `<span class="objective-icon">&#9670;</span><span>${escapeHtml(z.name)}</span><em>Priority Area</em>`;
       } else {
         const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : (z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS') ? 'detected by ORION' : '';
         el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
@@ -468,13 +503,23 @@ export class TheatreMap implements OnDestroy {
       })),
     });
   }
-  protected toggleMapMode(mode: 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
+  protected toggleMapMode(mode: 'create_patrol' | 'create_threat' | 'create_corridor' | 'create_objective' | 'delete_zone' | 'pick_loiter'): void {
     if (this.store.mapMode() === mode) {
       this.cancelMapMode();
     } else {
       this.cancelMapMode();
       this.store.setMapMode(mode);
     }
+  }
+
+  protected finishObjective(): void {
+    if (this.objectivePoints.length >= 3) {
+      const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'OBJECTIVE').length;
+      const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
+      const label = greek[count] ?? `Sector-${count + 1}`;
+      this.store.createObjectiveZone(`Objective Zone ${label}`, this.objectivePoints);
+    }
+    this.cancelMapMode();
   }
 
   protected finishCorridor(): void {
@@ -494,8 +539,10 @@ export class TheatreMap implements OnDestroy {
     }
     this.drawCenter = null;
     this.corridorPoints = [];
+    this.objectivePoints = [];
     (this.map?.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
     (this.map?.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData(empty());
+    (this.map?.getSource('preview-objective') as GeoJSONSource | undefined)?.setData(empty());
     this.store.setMapMode('view');
   }
 
@@ -566,6 +613,29 @@ export class TheatreMap implements OnDestroy {
             }],
           });
         }
+      } else if (mode === 'create_objective') {
+        this.objectivePoints.push([e.lngLat.lat, e.lngLat.lng]);
+        if (this.objectivePoints.length >= 3) {
+          const ring = this.objectivePoints.map(pt => [pt[1], pt[0]]);
+          ring.push([ring[0][0], ring[0][1]]);
+          (map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: {},
+              geometry: { type: 'Polygon', coordinates: [ring] },
+            }],
+          });
+        } else if (this.objectivePoints.length === 2) {
+          (map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: {},
+              geometry: { type: 'LineString', coordinates: this.objectivePoints.map(pt => [pt[1], pt[0]]) },
+            }],
+          });
+        }
       } else if (mode === 'delete_zone') {
         const clickedLat = e.lngLat.lat;
         const clickedLon = e.lngLat.lng;
@@ -586,6 +656,18 @@ export class TheatreMap implements OnDestroy {
         });
         if (clickedCorridor) {
           this.store.deleteZone(clickedCorridor.id);
+          this.store.setMapMode('view');
+          return;
+        }
+        // Then objective zones (polygons)
+        const activeObjectives = this.store.zones().filter(z => z.is_active && z.zone_type === 'OBJECTIVE' && z.waypoints?.length);
+        const clickedObjective = activeObjectives.find(obj => {
+          const nearVertex = obj.waypoints!.some(wp => distanceM(wp[0], wp[1], clickedLat, clickedLon) <= 220);
+          if (nearVertex) return true;
+          return pointInPolygon(clickedLat, clickedLon, obj.waypoints!);
+        });
+        if (clickedObjective) {
+          this.store.deleteZone(clickedObjective.id);
         }
         this.store.setMapMode('view');
       } else if (mode === 'pick_loiter') {
@@ -599,6 +681,9 @@ export class TheatreMap implements OnDestroy {
       if (this.store.mapMode() === 'create_corridor') {
         e.preventDefault();
         this.finishCorridor();
+      } else if (this.store.mapMode() === 'create_objective') {
+        e.preventDefault();
+        this.finishObjective();
       }
     });
   }
@@ -694,4 +779,15 @@ function gridLines(): FeatureCollection {
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+function pointInPolygon(lat: number, lon: number, polygon: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = ((yi > lon) !== (yj > lon)) && (lat < ((xj - xi) * (lon - yi)) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }

@@ -44,6 +44,11 @@ class CreateSafeCorridorRequest(BaseModel):
     waypoints: List[List[float]] = Field(..., min_length=2, description="List of [lat, lon]")
 
 
+class CreateObjectiveZoneRequest(BaseModel):
+    name: Optional[str] = None
+    waypoints: List[List[float]] = Field(..., min_length=3, description="List of [lat, lon] polygon vertices")
+
+
 class ExecuteZoneTacticRequest(BaseModel):
     zone_id: int
     tactic: str = Field(..., description="SECTOR_ORBIT_SHIFT, TIGHT_MESH, WIDE_RECON, EGRESS_CORRIDOR, RESYNC_EQUIDISTANT")
