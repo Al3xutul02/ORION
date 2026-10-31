@@ -37,6 +37,11 @@
           </div>
         </div>
 
+        <div class="rationale">
+          <span class="tag reason-tag">Reason</span>
+          <p>{{ recReason(rec) }}</p>
+        </div>
+
         <div class="rec-actions">
           <button class="btn approve" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'APPROVE')">
             Approve &amp; send signed

@@ -19,6 +19,7 @@ class RecommendationResponse(BaseModel):
     blocked_reason: str
     recommended_action: str
     recommendation_details: Optional[str]
+    reason: Optional[str] = None
     status: str
     operator_id: Optional[str]
     approved_at: Optional[datetime]

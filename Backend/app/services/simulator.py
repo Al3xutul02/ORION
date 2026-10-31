@@ -251,6 +251,7 @@ class OrionFleetSimulator:
             existing.blocked_reason = rec["blocked_reason"]
             existing.recommended_action = rec["recommended_action"]
             existing.recommendation_details = rec["recommendation_details"]
+            existing.reason = rec.get("reason")
             db.commit()
             return
 
@@ -261,7 +262,8 @@ class OrionFleetSimulator:
             blocked_action=rec["blocked_action"],
             blocked_reason=rec["blocked_reason"],
             recommended_action=rec["recommended_action"],
-            details=rec["recommendation_details"]
+            details=rec["recommendation_details"],
+            reason=rec.get("reason")
         )
 
     def execute_drone_action(self, drone_id: int, action: str):
@@ -269,6 +271,8 @@ class OrionFleetSimulator:
         if drone_id not in self.drones:
             return
         d = self.drones[drone_id]
+        d["safe_airspace_time"] = 0.0
+        d["spoof_duration"] = 0.0
         base_lat = theatre_rules.home_base["lat"]
         base_lon = theatre_rules.home_base["lon"]
 
@@ -735,8 +739,48 @@ class OrionFleetSimulator:
             return
 
         # Drone is degraded (spoofed or jammed) AND outside all hazard zones.
-        # Recalibrate faster (3.5s) when actively stabilizing in LOITER/CORRIDOR/RTL, or 6s in PATROL.
-        recal_threshold = 3.5 if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL", "ROUTE") else 6.0
+        if d_data["mode"] == "PATROL":
+            # In PATROL mode, cruising blind does not stabilize the EKF.
+            # safe_airspace_time remains 0. The spoofing persists until operator commands LOITER/egress
+            # or the adversary burst duration (25s) completes.
+            d_data["safe_airspace_time"] = 0.0
+            d_data["spoof_duration"] = d_data.get("spoof_duration", 0.0) + dt
+            if d_data["spoof_duration"] < 25.0:
+                return
+
+            # Adversary spoofing transmission burst expired while still on patrol
+            d_data["spoofed"] = False
+            d_data["jammed"] = False
+            d_data["spoof_offset"] = (0.0, 0.0)
+            d_data["spoof_duration"] = 0.0
+            trust_evaluator.drone_history.pop(d_id, None)
+
+            aar_service.log_event(
+                db=db,
+                event_type="GPS_RESTORED",
+                drone_id=d_id,
+                details={
+                    "description": f"Adversary spoofing signal ceased; Drone {d_id} restored clean 3D GPS lock.",
+                    "mission_time_s": self.elapsed_time
+                },
+                operator_id="SYSTEM"
+            )
+
+            # Supersede pending recommendation since spoofing cleared
+            pending = (
+                db.query(ActionRecommendation)
+                .filter(ActionRecommendation.drone_id == d_id, ActionRecommendation.status == "PENDING")
+                .all()
+            )
+            for rec in pending:
+                rec.status = "SUPERSEDED"
+            if pending:
+                db.commit()
+            return
+
+        # Active stabilization mode: LOITER, CORRIDOR, RTL, ROUTE
+        d_data["spoof_duration"] = 0.0
+        recal_threshold = 5.0  # 10s of steady holding/transit in safe airspace allows EKF to converge
         d_data["safe_airspace_time"] = d_data.get("safe_airspace_time", 0.0) + dt
 
         if d_data["safe_airspace_time"] >= recal_threshold:

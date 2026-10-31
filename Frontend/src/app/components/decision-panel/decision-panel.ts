@@ -50,4 +50,29 @@ export class DecisionPanel {
   protected pretty(action: string): string {
     return action.replaceAll('_', ' ').toLowerCase();
   }
+
+  protected recReason(rec: Recommendation): string {
+    if (rec.reason) return rec.reason;
+    if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE') {
+      return 'Sensors recalibrated and clean GPS fix verified; safe to resume regular sector patrol.';
+    }
+    if (rec.recommended_action === 'CONTINUE_PATROL') {
+      return 'Sensors and navigation verified nominal in safe airspace; clear to resume patrol orbit.';
+    }
+    if (rec.recommended_action.includes('CORRIDOR')) {
+      return rec.blocked_reason
+        ? `Direct route compromised (${rec.blocked_reason}); verified corridor provides safe egress.`
+        : 'Safe corridor provides clear passage away from battlefield interference.';
+    }
+    if (rec.recommended_action === 'SAFE_ROUTE_RETREAT') {
+      return 'Direct RTL path is blocked; computed A* route skirts active hazard boundaries safely.';
+    }
+    if (rec.recommended_action === 'LOITER') {
+      return 'Sudden GPS ephemeris jump detected; holding position allows onboard EKF/IMU to stabilize and reject false fix.';
+    }
+    if (rec.recommended_action === 'RETURN_TO_HOME') {
+      return 'Direct flight corridor to Home Base is verified clear of known EW hazards and severe weather.';
+    }
+    return rec.blocked_reason || 'Tactical safety procedure recommended by ORION rules engine.';
+  }
 }

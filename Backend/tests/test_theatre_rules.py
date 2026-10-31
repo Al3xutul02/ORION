@@ -24,6 +24,7 @@ def test_rtl_blocking_when_crossing_ew_zone():
     assert rec is not None
     assert rec["blocked_action"] == "RETURN_TO_HOME"
     assert "LOITER" in rec["recommended_action"]
+    assert rec.get("reason") is not None and len(rec["reason"]) > 10
 
 
 def test_safe_path_allows_standard_recommendation():
@@ -51,6 +52,24 @@ def test_recalibrated_drone_gets_continue_patrol_recommendation():
     assert rec is not None
     assert rec["recommended_action"] == "CONTINUE_PATROL"
     assert rec["trigger_event"] == "SENSORS_RECALIBRATED_SAFE"
+    assert rec.get("reason") is not None and "recalibrated" in rec["reason"].lower()
+
+
+def test_spoofed_drone_in_patrol_recommends_loiter_with_reason():
+    engine = TheatreRulesEngine()
+    # Drone in PATROL mode suffers sudden GPS spoofing jump in clean airspace
+    rec = engine.evaluate_tactical_recommendation(
+        drone_id=2,
+        drone_lat=44.3200,
+        drone_lon=23.7950,
+        trust_score=28.0,
+        reason="GPS spoofing detected on Drone 2",
+        flight_mode="PATROL"
+    )
+    assert rec is not None
+    assert rec["recommended_action"] == "LOITER"
+    assert rec["blocked_action"] == "CONTINUE_PATROL"
+    assert "reason" in rec and len(rec["reason"]) > 15
 
 
 def test_spawned_danger_zones_do_not_overlap_or_exceed_cap():

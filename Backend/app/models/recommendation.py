@@ -22,6 +22,7 @@ class ActionRecommendation(Base):
     
     recommended_action = Column(String(100), nullable=False) # e.g., "LOITER_THEN_CORRIDOR_ALPHA"
     recommendation_details = Column(Text, nullable=True)     # waypoint list, loiter duration, etc.
+    reason = Column(Text, nullable=True)                     # Tactical rationale explaining why this was recommended
     
     status = Column(String(50), default="PENDING")          # PENDING, APPROVED, REJECTED, EXECUTED
     operator_id = Column(String(100), nullable=True)

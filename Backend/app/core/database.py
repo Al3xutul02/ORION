@@ -70,7 +70,27 @@ def get_engine():
     return engine
 
 
+def _migrate_db(eng):
+    try:
+        with eng.connect() as conn:
+            try:
+                conn.execute(text("SELECT reason FROM action_recommendations LIMIT 1"))
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("ALTER TABLE action_recommendations ADD COLUMN reason TEXT"))
+                    conn.commit()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 engine = get_engine()
+_migrate_db(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

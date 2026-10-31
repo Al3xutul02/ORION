@@ -108,6 +108,7 @@ export interface Recommendation {
   blocked_reason: string;
   recommended_action: string;
   recommendation_details: string | null;
+  reason?: string | null;
   status: RecommendationStatus;
   operator_id: string | null;
   approved_at: string | null;

@@ -27,7 +27,8 @@ class CommandManager:
         blocked_action: str,
         blocked_reason: str,
         recommended_action: str,
-        details: Optional[str] = None
+        details: Optional[str] = None,
+        reason: Optional[str] = None
     ) -> ActionRecommendation:
         rec = ActionRecommendation(
             drone_id=drone_id,
@@ -36,6 +37,7 @@ class CommandManager:
             blocked_reason=blocked_reason,
             recommended_action=recommended_action,
             recommendation_details=details,
+            reason=reason,
             status="PENDING"
         )
         db.add(rec)
@@ -51,7 +53,8 @@ class CommandManager:
                 "recommendation_id": rec.id,
                 "blocked_action": blocked_action,
                 "blocked_reason": blocked_reason,
-                "recommended_action": recommended_action
+                "recommended_action": recommended_action,
+                "reason": reason
             },
             operator_id="SYSTEM"
         )

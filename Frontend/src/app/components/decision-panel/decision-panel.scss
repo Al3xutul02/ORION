@@ -74,6 +74,29 @@
   color: var(--green);
 }
 
+.rationale {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 8px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--panel) 40%, transparent);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--cyan) 25%, var(--line));
+
+  p {
+    margin: 0;
+    color: var(--text);
+    line-height: 1.4;
+  }
+}
+
+.reason-tag {
+  background: color-mix(in srgb, var(--cyan) 16%, transparent);
+  color: var(--cyan);
+  border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent);
+}
+
 .rec-actions {
   display: flex;
   gap: 8px;

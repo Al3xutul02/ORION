@@ -284,12 +284,15 @@ export class OfflineSimulator {
       id: this.recs.length + 1,
       drone_id: 2,
       timestamp: new Date().toISOString(),
-      trigger_event: rtl.allowed ? 'TRUST_DEGRADED' : 'TRUST_DEGRADED_EW_HAZARD',
-      blocked_action: rtl.allowed ? 'NONE' : 'RETURN_TO_HOME',
-      blocked_reason: rtl.allowed ? 'Direct corridor clear' : `Direct Return-to-Home route blocked: ${rtl.reason}`,
-      recommended_action: rtl.allowed ? 'RETURN_TO_HOME' : 'LOITER_THEN_SAFE_CORRIDOR_RETREAT',
+      trigger_event: rtl.allowed ? 'SPOOFING_ATTACK_DETECTED' : 'TRUST_DEGRADED_EW_HAZARD',
+      blocked_action: rtl.allowed ? 'CONTINUE_PATROL' : 'RETURN_TO_HOME',
+      blocked_reason: rtl.allowed ? 'GPS ephemeris corrupted by spoofing attack; patrol trajectory compromised' : `Direct Return-to-Home route blocked: ${rtl.reason}`,
+      recommended_action: rtl.allowed ? 'LOITER' : 'LOITER_THEN_SAFE_CORRIDOR_RETREAT',
+      reason: rtl.allowed
+        ? 'Sudden GPS ephemeris jump detected from spoofing attack. Holding position (LOITER) allows onboard EKF/IMU filters to stabilize and reject false fix before resuming patrol.'
+        : 'Direct flight path to Base is blocked by hostile EW jamming; Safe Corridor Alpha provides verified safe egress.',
       recommendation_details: rtl.allowed
-        ? 'Corridor to Home Base is clear of known EW interference. Standard RTL permitted.'
+        ? '1. Command immediate LOITER to hold position and stabilize flight. 2. Allow onboard EKF/IMU filters to stabilize. 3. Await sensor recalibration before continuing patrol.'
         : '1. Command immediate LOITER to stabilize. 2. Steer egress via Safe Corridor Alpha (avoiding EW Jamming Zone Sector 4) to Base.',
       status: 'PENDING',
       operator_id: null,
@@ -392,6 +395,7 @@ export class OfflineSimulator {
     }, operatorId);
 
     const d = this.drone(droneId);
+    d.safeAirspaceTime = 0;
     const state = this.states().find(s => s.drone_id === droneId)!;
     const paths = egressPaths(state, this.zones);
     d.egressLeg = 0;
@@ -501,7 +505,7 @@ export class OfflineSimulator {
     }
 
     d.safeAirspaceTime += dt;
-    if (d.safeAirspaceTime >= 4.0) {
+    if (d.safeAirspaceTime >= 5.0) {
       const wasSpoofed = d.spoofedAt !== null;
       d.spoofedAt = null;
       d.jammedAt = null;
@@ -525,6 +529,7 @@ export class OfflineSimulator {
           blocked_action: 'NONE',
           blocked_reason: 'Sensors and navigation nominal',
           recommended_action: 'CONTINUE_PATROL',
+          reason: 'Sensors recalibrated and clean GPS fix verified after stabilization in safe airspace; safe to resume regular sector patrol.',
           recommendation_details: 'Sensors recalibrated and clean GPS fix verified. Airspace is clear; safe to resume regular sector patrol.',
           status: 'PENDING',
           operator_id: null,
