@@ -84,6 +84,8 @@ export class OrionStore implements OnDestroy {
   readonly speed = signal(1);
   readonly muted = signal(this.savedMuted());
   readonly busy = signal(false);
+  readonly randomIntervalMin = signal<number>(this.savedIntervalMin());
+  readonly randomIntervalMax = signal<number>(this.savedIntervalMax());
   readonly copilot = signal<CopilotMessage[]>([]);
   readonly copilotBusy = signal(false);
   /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
@@ -185,7 +187,10 @@ export class OrionStore implements OnDestroy {
       return;
     }
     this.socket = ws;
-    ws.onopen = () => this.link.set('online');
+    ws.onopen = () => {
+      this.link.set('online');
+      this.api.setRandomInterval(this.randomIntervalMin(), this.randomIntervalMax()).catch(() => {});
+    };
     ws.onmessage = ev => {
       try {
         this.handleSocket(JSON.parse(ev.data) as SocketMessage);
@@ -243,6 +248,12 @@ export class OrionStore implements OnDestroy {
     this.zones.set(u.zones);
     this.elapsed.set(u.elapsed_time);
     this.sectorInterference.set(u.active_sector_interference);
+    if (u.random_interval_min !== undefined && u.random_interval_max !== undefined) {
+      if (this.randomIntervalMin() !== u.random_interval_min || this.randomIntervalMax() !== u.random_interval_max) {
+        this.randomIntervalMin.set(u.random_interval_min);
+        this.randomIntervalMax.set(u.random_interval_max);
+      }
+    }
     this.trustHistory.update(h => {
       const next = { ...h };
       for (const d of u.drones) next[d.drone_id] = [...(h[d.drone_id] ?? []), d.trust_score].slice(-HISTORY_LEN);
@@ -562,6 +573,41 @@ export class OrionStore implements OnDestroy {
 
   private savedMode(): DataMode {
     try { return localStorage.getItem('orion.mode') === 'offline' ? 'offline' : 'live'; } catch { return 'live'; }
+  }
+
+  setRandomInterval(minS: number, maxS: number): void {
+    const minVal = Math.max(1, Math.round(Math.min(minS, maxS) * 10) / 10);
+    const maxVal = Math.max(minVal, Math.round(maxS * 10) / 10);
+    this.randomIntervalMin.set(minVal);
+    this.randomIntervalMax.set(maxVal);
+    try {
+      localStorage.setItem('orion.randomIntervalMin', String(minVal));
+      localStorage.setItem('orion.randomIntervalMax', String(maxVal));
+    } catch { /* storage unavailable */ }
+
+    if (this.mode() === 'live') {
+      this.api.setRandomInterval(minVal, maxVal).catch((err) => {
+        console.warn('Failed to update random event interval on backend', err);
+      });
+    }
+  }
+
+  private savedIntervalMin(): number {
+    try {
+      const v = parseFloat(localStorage.getItem('orion.randomIntervalMin') ?? '');
+      return !isNaN(v) && v > 0 ? v : 12;
+    } catch {
+      return 12;
+    }
+  }
+
+  private savedIntervalMax(): number {
+    try {
+      const v = parseFloat(localStorage.getItem('orion.randomIntervalMax') ?? '');
+      return !isNaN(v) && v > 0 ? v : 18;
+    } catch {
+      return 18;
+    }
   }
 
   private savedMuted(): boolean {

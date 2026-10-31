@@ -66,6 +66,15 @@ export class OrionApi {
     );
   }
 
+  setRandomInterval(min_s: number, max_s: number) {
+    return firstValueFrom(
+      this.http.post<{ status: string; random_interval_min: number; random_interval_max: number }>(
+        `${this.base}/simulation/config-random-interval`,
+        { min_s, max_s },
+      ),
+    );
+  }
+
   weatherAppear(kind: 'STORM' | 'RAIN' | 'WIND') {
     return firstValueFrom(this.http.post<{ status: string }>(`${this.base}/simulation/trigger-weather-appear`, {}, { params: { kind } }));
   }

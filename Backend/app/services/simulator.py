@@ -47,6 +47,8 @@ class OrionFleetSimulator:
 
         self.drones: Dict[int, Dict[str, Any]] = {}
         self.milestones_reached: Dict[str, bool] = {}
+        self.random_interval_min: float = 12.0
+        self.random_interval_max: float = 18.0
         self.next_random_event_at: float = 12.0
         self._last_event_kind: Optional[str] = None
         self._init_drones()
@@ -221,6 +223,15 @@ class OrionFleetSimulator:
                 },
                 operator_id="SYSTEM",
             )
+        self.next_random_event_at = random.uniform(self.random_interval_min, self.random_interval_max)
+
+    def set_random_interval(self, min_s: float, max_s: float):
+        self.random_interval_min = float(min_s)
+        self.random_interval_max = float(max_s)
+        remaining = self.next_random_event_at - self.elapsed_time
+        if remaining > max_s or remaining < 0:
+            self.next_random_event_at = self.elapsed_time + random.uniform(min_s, max_s)
+        logger.info("ORION random battlefield event interval set to [%.1fs, %.1fs]", min_s, max_s)
 
     def _issue_recommendation_for_drone(self, db, drone_id: int, reason: str):
         """Evaluates theatre rules for a drone and creates a pending recommendation if needed."""
@@ -849,7 +860,7 @@ class OrionFleetSimulator:
                 # Periodic Random Battlefield Events in Live Mode
                 # -------------------------------------------------------------
                 if self.elapsed_time >= self.next_random_event_at:
-                    self.next_random_event_at = self.elapsed_time + random.uniform(12.0, 18.0)
+                    self.next_random_event_at = self.elapsed_time + random.uniform(self.random_interval_min, self.random_interval_max)
                     self.trigger_random_event(db)
 
                 # -------------------------------------------------------------
@@ -911,7 +922,9 @@ class OrionFleetSimulator:
                     "elapsed_time": self.elapsed_time,
                     "active_sector_interference": trust_evaluator.localized_interference_active,
                     "zones": theatre_rules.active_zones(),
-                    "drones": drone_states
+                    "drones": drone_states,
+                    "random_interval_min": self.random_interval_min,
+                    "random_interval_max": self.random_interval_max,
                 }
                 await self.broadcast(ws_payload)
 

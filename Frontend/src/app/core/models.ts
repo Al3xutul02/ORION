@@ -67,6 +67,8 @@ export interface FleetUpdate {
   active_sector_interference: boolean;
   zones: Zone[];
   drones: DroneState[];
+  random_interval_min?: number;
+  random_interval_max?: number;
 }
 
 export interface SnapshotMessage {

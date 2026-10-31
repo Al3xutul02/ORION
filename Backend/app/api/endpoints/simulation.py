@@ -98,6 +98,24 @@ def trigger_weather_clear_scenario(db: Session = Depends(get_db)):
     return {**res, "status": "weather_cleared"}
 
 
+from pydantic import BaseModel, Field
+
+class RandomIntervalConfig(BaseModel):
+    min_s: float = Field(..., ge=1.0, description="Minimum interval in seconds between random events")
+    max_s: float = Field(..., ge=1.0, description="Maximum interval in seconds between random events")
+
+@router.post("/config-random-interval")
+def config_random_interval(config: RandomIntervalConfig):
+    if config.max_s < config.min_s:
+        raise HTTPException(status_code=400, detail="max_s must be greater than or equal to min_s")
+    simulator.set_random_interval(config.min_s, config.max_s)
+    return {
+        "status": "configured",
+        "random_interval_min": simulator.random_interval_min,
+        "random_interval_max": simulator.random_interval_max,
+        "next_random_event_at": simulator.next_random_event_at,
+    }
+
 @router.get("/status")
 def get_simulation_status():
     return {
@@ -105,4 +123,6 @@ def get_simulation_status():
         "elapsed_time": round(simulator.elapsed_time, 1),
         "spoofing_active_drone_2": simulator.spoofing_active_drone_2,
         "sector_interference_active": simulator.sector_interference_active,
+        "random_interval_min": simulator.random_interval_min,
+        "random_interval_max": simulator.random_interval_max,
     }

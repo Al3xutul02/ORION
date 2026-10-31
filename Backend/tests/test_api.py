@@ -98,3 +98,20 @@ def test_aar_verify(client):
     assert response.status_code == 200
     report = response.json()
     assert report["is_valid"] is True
+
+
+def test_config_random_interval(client):
+    res = client.post("/api/v1/simulation/config-random-interval", json={"min_s": 4.0, "max_s": 8.0})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "configured"
+    assert data["random_interval_min"] == 4.0
+    assert data["random_interval_max"] == 8.0
+
+    st = client.get("/api/v1/simulation/status")
+    assert st.status_code == 200
+    assert st.json()["random_interval_min"] == 4.0
+    assert st.json()["random_interval_max"] == 8.0
+
+    bad = client.post("/api/v1/simulation/config-random-interval", json={"min_s": 10.0, "max_s": 2.0})
+    assert bad.status_code == 400
