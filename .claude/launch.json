@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "orion-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "Frontend", "start", "--", "--port", "4201"],
+      "port": 4201
+    }
+  ]
+}
