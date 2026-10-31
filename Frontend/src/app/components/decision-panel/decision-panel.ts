@@ -53,26 +53,25 @@ export class DecisionPanel {
 
   protected recReason(rec: Recommendation): string {
     if (rec.reason) return rec.reason;
-    if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE') {
-      return 'Sensors recalibrated and clean GPS fix verified; safe to resume regular sector patrol.';
+    if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE' || rec.recommended_action === 'CONTINUE_PATROL') {
+      return 'Sensor recalibration complete and verified in clean airspace. Action needed: Drone is holding idle in loiter; operator command is required to resume regular sector patrol.';
     }
-    if (rec.recommended_action === 'CONTINUE_PATROL') {
-      return 'Sensors and navigation verified nominal in safe airspace; clear to resume patrol orbit.';
+    if (rec.trigger_event === 'SPOOFING_ATTACK_DETECTED' || rec.recommended_action === 'LOITER') {
+      return 'Adversary GPS spoofing detected (sudden ephemeris jump). Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger; immediate LOITER is required to hold position and stabilize onboard EKF/IMU.';
     }
     if (rec.recommended_action.includes('CORRIDOR')) {
       return rec.blocked_reason
-        ? `Direct route compromised (${rec.blocked_reason}); verified corridor provides safe egress.`
-        : 'Safe corridor provides clear passage away from battlefield interference.';
+        ? `Hostile electronic warfare hazard active (${rec.blocked_reason}). Action needed: Direct flight path is compromised; drone must divert through Safe Corridor to prevent complete C2 link loss.`
+        : 'Hostile interference active in sector. Action needed: Drone must divert through verified Safe Corridor to maintain link.';
     }
     if (rec.recommended_action === 'SAFE_ROUTE_RETREAT') {
-      return 'Direct RTL path is blocked; computed A* route skirts active hazard boundaries safely.';
-    }
-    if (rec.recommended_action === 'LOITER') {
-      return 'Sudden GPS ephemeris jump detected; holding position allows onboard EKF/IMU to stabilize and reject false fix.';
+      return `Direct path to Base is blocked (${rec.blocked_reason || 'hazard zone'}). Action needed: Drone must navigate around threats via computed A* safe waypoints to reach Base.`;
     }
     if (rec.recommended_action === 'RETURN_TO_HOME') {
-      return 'Direct flight corridor to Home Base is verified clear of known EW hazards and severe weather.';
+      return 'Sensor confidence degraded or operating limits exceeded. Action needed: Return-to-base along clear corridor is required to protect the airframe.';
     }
-    return rec.blocked_reason || 'Tactical safety procedure recommended by ORION rules engine.';
+    return rec.blocked_reason
+      ? `Operating hazard detected: ${rec.blocked_reason}. Action needed: Tactical intervention required to safeguard the airframe.`
+      : 'Action needed: Tactical safety procedure required by ORION rules engine.';
   }
 }

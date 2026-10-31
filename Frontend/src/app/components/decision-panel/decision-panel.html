@@ -15,6 +15,11 @@
           <span class="mono faint">#{{ rec.id }} · {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
         </div>
 
+        <div class="rationale">
+          <span class="tag reason-tag">Why needed</span>
+          <p>{{ recReason(rec) }}</p>
+        </div>
+
         @if (rec.blocked_action !== 'NONE') {
           <div class="blocked">
             <span class="tag">Blocked</span>
@@ -35,11 +40,6 @@
               }
             </ol>
           </div>
-        </div>
-
-        <div class="rationale">
-          <span class="tag reason-tag">Reason</span>
-          <p>{{ recReason(rec) }}</p>
         </div>
 
         <div class="rec-actions">

@@ -289,8 +289,8 @@ export class OfflineSimulator {
       blocked_reason: rtl.allowed ? 'GPS ephemeris corrupted by spoofing attack; patrol trajectory compromised' : `Direct Return-to-Home route blocked: ${rtl.reason}`,
       recommended_action: rtl.allowed ? 'LOITER' : 'LOITER_THEN_SAFE_CORRIDOR_RETREAT',
       reason: rtl.allowed
-        ? 'Sudden GPS ephemeris jump detected from spoofing attack. Holding position (LOITER) allows onboard EKF/IMU filters to stabilize and reject false fix before resuming patrol.'
-        : 'Direct flight path to Base is blocked by hostile EW jamming; Safe Corridor Alpha provides verified safe egress.',
+        ? 'Adversary GPS spoofing detected (sudden ephemeris jump). Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger; immediate LOITER is required to hold position and stabilize onboard EKF/IMU.'
+        : 'Hostile electronic warfare hazard active: Direct path to Base is compromised by EW jamming. Action needed: Direct RTL will cause complete C2 link loss; drone must immediately loiter and divert through Safe Corridor Alpha.',
       recommendation_details: rtl.allowed
         ? '1. Command immediate LOITER to hold position and stabilize flight. 2. Allow onboard EKF/IMU filters to stabilize. 3. Await sensor recalibration before continuing patrol.'
         : '1. Command immediate LOITER to stabilize. 2. Steer egress via Safe Corridor Alpha (avoiding EW Jamming Zone Sector 4) to Base.',
@@ -529,7 +529,7 @@ export class OfflineSimulator {
           blocked_action: 'NONE',
           blocked_reason: 'Sensors and navigation nominal',
           recommended_action: 'CONTINUE_PATROL',
-          reason: 'Sensors recalibrated and clean GPS fix verified after stabilization in safe airspace; safe to resume regular sector patrol.',
+          reason: 'Sensor recalibration complete and verified in clean airspace. Action needed: Drone is holding idle in loiter; operator command is required to resume regular sector patrol.',
           recommendation_details: 'Sensors recalibrated and clean GPS fix verified. Airspace is clear; safe to resume regular sector patrol.',
           status: 'PENDING',
           operator_id: null,

@@ -564,8 +564,8 @@ class TheatreRulesEngine:
                         "blocked_reason": "Sensors and navigation nominal",
                         "recommended_action": "CONTINUE_PATROL",
                         "reason": (
-                            "Sensors recalibrated and clean GPS fix verified. "
-                            "Airspace is clear of known hazards; safe to resume regular sector patrol."
+                            "Sensors recalibrated and verified in clean airspace. "
+                            "Action needed: Drone is holding idle in loiter; operator command is required to resume active sector patrol."
                         ),
                         "recommendation_details": (
                             "Sensors recalibrated and clean GPS fix verified. "
@@ -589,8 +589,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct Return-to-Home route blocked: {block_reason}",
                     "recommended_action": "LOITER_THEN_SAFE_CORRIDOR_RETREAT",
                     "reason": (
-                        f"Direct flight path to Base is blocked by {block_reason}. "
-                        f"Holding to stabilize before retreating via verified Safe Corridor {c_name} prevents hostile intercept."
+                        f"Hostile electronic warfare hazard active: Direct path to Base is compromised by {block_reason}. "
+                        f"Action needed: Direct RTL will cause complete C2 link loss; drone must immediately loiter and divert through Safe Corridor {c_name}."
                     ),
                     "recommendation_details": (
                         f"1. Command immediate LOITER to stabilize. "
@@ -615,8 +615,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
                     "recommended_action": "SAFE_ROUTE_RETREAT",
                     "reason": (
-                        f"Direct RTL blocked ({block_reason}) and corridors unavailable. "
-                        "Computed A* route safely bypasses all active EW and weather hazards to Base."
+                        f"Hostile interference active: Direct path to Base crosses active hazards ({block_reason}) and corridors are closed. "
+                        "Action needed: Direct RTL would fly into hostile threat coverage; drone must follow computed A* obstacle-avoidance route to Base."
                     ),
                     "recommendation_details": (
                         f"1. Fly the computed safe route to Base: {legs} legs, "
@@ -638,8 +638,8 @@ class TheatreRulesEngine:
                     "blocked_reason": f"Direct RTL blocked ({block_reason}); {corr_block_reason}",
                     "recommended_action": "LOITER",
                     "reason": (
-                        f"Direct RTL blocked ({block_reason}) and no safe retreat corridor exists. "
-                        "Holding position (LOITER) maintains altitude while awaiting an egress path."
+                        f"Hostile interference active: Direct RTL is blocked ({block_reason}) and no safe egress corridor is available. "
+                        "Action needed: Immediate LOITER is required to hold altitude and prevent wandering into surrounding hostile zones while awaiting corridor clearance."
                     ),
                     "recommendation_details": (
                         "1. Hold position (LOITER) at current altitude to stabilize. "
@@ -658,8 +658,9 @@ class TheatreRulesEngine:
                     "blocked_reason": "GPS ephemeris corrupted by spoofing attack; patrol trajectory compromised",
                     "recommended_action": "LOITER",
                     "reason": (
-                        "Sudden GPS ephemeris jump detected from spoofing attack. "
-                        "Holding position (LOITER) allows onboard EKF/IMU filters to stabilize and reject false fix before resuming patrol."
+                        "Adversary GPS spoofing detected (sudden ephemeris jump). "
+                        "Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger. "
+                        "Immediate LOITER is required to hold position while onboard EKF/IMU filters isolate and reject false satellite signals."
                     ),
                     "recommendation_details": (
                         "1. Command immediate LOITER to hold position and stabilize flight. "
@@ -670,13 +671,35 @@ class TheatreRulesEngine:
                         {"lat": drone_lat, "lon": drone_lon, "alt": 120.0, "action": "LOITER"}
                     ]
                 }
+            if "weather" in reason.lower() or "wind" in reason.lower():
+                return {
+                    "drone_id": drone_id,
+                    "trigger_event": "WEATHER_LIMIT_EXCEEDED",
+                    "blocked_action": "CONTINUE_PATROL",
+                    "blocked_reason": "Wind conditions exceed platform structural safety limits",
+                    "recommended_action": "RETURN_TO_HOME",
+                    "reason": (
+                        f"Severe weather warning: {reason}. "
+                        "Action needed: Extreme wind gusts exceed maximum airframe limits; immediate egress to Home Base is required to prevent aerodynamic loss of control."
+                    ),
+                    "recommendation_details": (
+                        "1. Abort sector patrol in hazardous weather. "
+                        "2. Return to Home Base directly along clear corridor."
+                    ),
+                    "safe_waypoints": [
+                        {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
+                    ]
+                }
             return {
                 "drone_id": drone_id,
                 "trigger_event": "TRUST_DEGRADED",
                 "blocked_action": "NONE",
                 "blocked_reason": "Direct corridor clear",
                 "recommended_action": "RETURN_TO_HOME",
-                "reason": "Sensor trust degraded but flight corridor to Home Base is clear of known EW hazards; standard RTL permitted.",
+                "reason": (
+                    "Sensor confidence has dropped below mission safety thresholds. "
+                    "Action needed: Return-to-base is required to protect the airframe; direct corridor to Home Base is verified clear of EW hazards."
+                ),
                 "recommendation_details": "Corridor to Home Base is clear of known EW interference. Standard RTL permitted.",
                 "safe_waypoints": [
                     {"lat": self.home_base["lat"], "lon": self.home_base["lon"], "alt": 150.0, "action": "LAND"}
