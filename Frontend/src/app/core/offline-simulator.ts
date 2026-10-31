@@ -144,6 +144,8 @@ export class OfflineSimulator {
     this.recs = [];
     this.jammer = null;
     this.zones = structuredClone(INITIAL_ZONES);
+    SECTORS.A.center = { lat: 44.335, lon: 23.83 };
+    SECTORS.A.orbit = { lat: 0.003, lon: 0.004 };
     const fleet: [Sector, number][] = [
       [SECTORS.A, 0], [SECTORS.A, Math.PI / 2], [SECTORS.A, Math.PI], [SECTORS.A, (3 * Math.PI) / 2],
       [SECTORS.B, Math.PI / 4], [SECTORS.B, (5 * Math.PI) / 4],
@@ -259,42 +261,73 @@ export class OfflineSimulator {
     if (!pz) return { ok: false, message: 'Patrol zone not found.' };
 
     const tacticUpper = tactic.toUpperCase();
+    const zoneDrones = this.drones.filter(d => (d.patrol_zone_id ?? 10) === zoneId || zoneId === 10 || zoneId === 100);
+
     if (tacticUpper === 'SECTOR_ORBIT_SHIFT') {
       const jammer = this.zones.find(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
       if (jammer && pz.center && pz.radius_m) {
         const vLat = pz.center[0] - jammer.center![0];
         const vLon = pz.center[1] - jammer.center![1];
         const mag = Math.hypot(vLat, vLon) || 0.001;
-        const shiftM = 220;
+        const shiftM = 280;
         const shiftLat = (shiftM / M_PER_DEG_LAT) * (vLat / mag);
         const shiftLon = (shiftM / (M_PER_DEG_LAT * Math.cos((pz.center[0] * Math.PI) / 180))) * (vLon / mag);
         pz.center = [pz.center[0] + shiftLat, pz.center[1] + shiftLon];
       } else if (pz.center) {
         pz.center = [pz.center[0] + 0.002, pz.center[1] + 0.002];
       }
-      for (const d of this.drones) {
+      if (pz.center) SECTORS.A.center = { lat: pz.center[0], lon: pz.center[1] };
+      for (const d of zoneDrones) {
         d.jammedAt = null;
         d.spoofedAt = null;
         d.safeAirspaceTime = 10;
+        d.onOrbit = false;
+        if (d.mode === 'LOITER') d.mode = 'PATROL';
       }
       this.zones = [...this.zones];
       this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'SECTOR_ORBIT_SHIFT', new_center: pz.center }, operatorId);
       return { ok: true, message: 'Sector Orbit Shift executed. Swarm shifted to clear airspace.' };
     } else if (tacticUpper === 'TIGHT_MESH') {
-      if (pz.radius_m) pz.radius_m = Math.round(pz.radius_m * 0.6);
+      const baseR = (pz as any)['base_radius_m'] ?? pz.radius_m ?? 350;
+      (pz as any)['base_radius_m'] = baseR;
+      pz.radius_m = Math.round(Math.max(100, baseR * 0.6));
+      const scale = pz.radius_m / 350;
+      SECTORS.A.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
+      for (const d of zoneDrones) {
+        d.onOrbit = false;
+        if (d.mode === 'LOITER') d.mode = 'PATROL';
+      }
       this.zones = [...this.zones];
       this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'TIGHT_MESH', radius_m: pz.radius_m }, operatorId);
       return { ok: true, message: `Tight Mesh Formation activated (${pz.radius_m}m).` };
     } else if (tacticUpper === 'WIDE_RECON') {
-      if (pz.radius_m) pz.radius_m = Math.round(pz.radius_m * 1.45);
+      const baseR = (pz as any)['base_radius_m'] ?? pz.radius_m ?? 350;
+      (pz as any)['base_radius_m'] = baseR;
+      pz.radius_m = Math.round(Math.min(800, baseR * 1.45));
+      const scale = pz.radius_m / 350;
+      SECTORS.A.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
+      for (const d of zoneDrones) {
+        d.onOrbit = false;
+        if (d.mode === 'LOITER') d.mode = 'PATROL';
+      }
       this.zones = [...this.zones];
       this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'WIDE_RECON', radius_m: pz.radius_m }, operatorId);
       return { ok: true, message: `Dispersed Wide Recon activated (${pz.radius_m}m).` };
     } else if (tacticUpper === 'RESYNC_EQUIDISTANT') {
+      if (zoneDrones.length > 0) {
+        const stepAngle = (2 * Math.PI) / zoneDrones.length;
+        const baseAngle = zoneDrones[0].angle;
+        zoneDrones.forEach((d, idx) => {
+          d.angle = (baseAngle + idx * stepAngle) % (2 * Math.PI);
+          d.patrolRate = ANGULAR_SPEED;
+          d.onOrbit = false;
+          if (d.mode === 'LOITER') d.mode = 'PATROL';
+        });
+      }
       this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'RESYNC_EQUIDISTANT' }, operatorId);
       return { ok: true, message: 'Equidistant Phase Resynchronization activated.' };
     } else if (tacticUpper === 'EGRESS_CORRIDOR') {
-      for (const d of this.drones) {
+      for (const d of zoneDrones) {
         if (d.mode === 'PATROL' || d.mode === 'LOITER') {
           this.command(d.id, 'SAFE_CORRIDOR_RETREAT', operatorId);
         }
@@ -314,14 +347,14 @@ export class OfflineSimulator {
       if (isJammed) {
         const existing = this.recs.find(r => r.trigger_event === 'PATROL_ZONE_JAMMED' && r.drone_id === pz.id);
         if (!existing) {
-          const rec: Recommendation = {
+          const rec = {
             id: this.recs.length + 1,
             drone_id: pz.id,
             trigger_event: 'PATROL_ZONE_JAMMED',
             blocked_action: 'NONE',
             blocked_reason: '',
             recommended_action: 'SECTOR_ORBIT_SHIFT',
-            status: 'PENDING',
+            status: 'PENDING' as const,
             reason: 'Active EW Jamming overlaps ' + pz.name + '. Shift patrol orbit to clear airspace to preserve swarm communications and GPS navigation integrity.',
             recommendation_details: '1. Displace patrol orbit center away from active EW jammer vector. 2. Maintain equidistant swarm spacing (360° / N) in safe airspace. 3. Preserve RF/mesh cross-ranging and communication line of sight.',
             operator_id: null,

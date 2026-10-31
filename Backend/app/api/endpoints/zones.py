@@ -187,23 +187,10 @@ def create_safe_corridor(payload: CreateSafeCorridorRequest, db: Session = Depen
 @router.post("/tactic")
 def execute_zone_tactic(payload: ExecuteZoneTacticRequest, db: Session = Depends(get_db)):
     """Executes a swarm tactical maneuver for an active patrol zone."""
-    res = theatre_rules.apply_patrol_tactic(payload.zone_id, payload.tactic)
+    from app.services.simulator import simulator
+    res = simulator.apply_zone_tactic(db, payload.zone_id, payload.tactic, operator_id="OPERATOR_1")
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=404, detail=res.get("message"))
-    
-    # If tactic is EGRESS_CORRIDOR, update simulator drones in this zone
-    from app.services.simulator import simulator
-    if payload.tactic.upper() == "EGRESS_CORRIDOR":
-        for d_id, d in simulator.drones.items():
-            if d.get("patrol_zone_id") == payload.zone_id and d.get("mode") in ("PATROL", "LOITER"):
-                simulator.execute_drone_action(db, d_id, "SAFE_CORRIDOR_RETREAT", operator_id="OPERATOR_1")
-    elif payload.tactic.upper() == "SECTOR_ORBIT_SHIFT":
-        # Recalibrate any jammed drones in that zone
-        for d_id, d in simulator.drones.items():
-            if d.get("patrol_zone_id") == payload.zone_id:
-                d["jammed"] = False
-                d["spoofed"] = False
-
     aar_service.log_event(
         db=db,
         event_type="PATROL_TACTIC_EXECUTED",
