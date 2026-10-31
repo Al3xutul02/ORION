@@ -2,7 +2,9 @@
 // ?api=http://host:8000 in the URL, which is remembered in localStorage.
 const DEFAULT_API =
   typeof window !== 'undefined' && window.location?.hostname
-    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    ? (window.location.protocol === 'https:' || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'))
+      ? window.location.origin
+      : `${window.location.protocol}//${window.location.hostname}:8000`
     : 'http://localhost:8000';
 
 function resolveApiBase(): string {
