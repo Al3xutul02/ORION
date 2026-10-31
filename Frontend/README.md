@@ -1,5 +1,20 @@
 # Frontend
 
+ORION Ground Control UI (Angular 20 + MapLibre GL).
+
+- **Operations** (`/`): theatre map with zones, drones, uncertainty circles and blocked/safe egress paths; per-drone trust scores (GPS, INS, link, peer consensus); the "what is safe now" action matrix with operator approval; the hash-chained after-action log.
+- **Ask ORION** (next to the log): read-only copilot. Answers come only from the hash-chained log and cite records as clickable `#id` links that highlight the row. Needs the backend running with `ANTHROPIC_API_KEY` (see Backend/README.md); in Offline mode the browser sends its own ledger.
+- **Report** (`/report`): post-action report with chain verification, attacks, decisions and full timeline. Export as JSON or print to PDF.
+
+Data sources (toggle in the top bar):
+
+- **Live**: FastAPI backend at `http://localhost:8000` (WebSocket `/ws/telemetry` + REST `/api/v1`). Point elsewhere with `?api=http://host:port`.
+- **Offline**: an extended version of the 3-minute exercise run in the browser (Plan B). Used automatically if the backend does not answer within 4 s. Supports 1×/2×/4× playback and a tamper test for the hash chain. On top of the backend's beats it adds a second patrol sector (6 drones), a mobile hostile jammer that ORION maps by peer consensus and tracks as it moves, and a command-link loss on D5 handled by the zone-filtered failsafe. In this mode the operator can also command any drone directly.
+
+Map: real basemap of the Craiova area (OpenStreetMap data via OpenFreeMap, no API key) with the exercise zones on top; falls back to a plain grid when offline. Toggle with **Real map / Grid**. The zones and attacks are simulated; nothing on the map is real data.
+
+The backend CORS list allows `http://localhost:4200`, so run the dev server on that port when using Live mode.
+
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 20.1.1.
 
 ## Development server

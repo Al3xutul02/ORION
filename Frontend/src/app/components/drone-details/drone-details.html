@@ -1,0 +1,156 @@
+@if (drone(); as d) {
+  <aside class="details status-{{ d.trust_status }}" aria-label="Drone details">
+    <header>
+      <div class="score mono">{{ d.trust_score | number: '1.0-0' }}</div>
+      <div class="ident">
+        <strong>Drone {{ d.drone_id }}</strong>
+        @if (d.source === 'MAVLINK') {
+          <span class="mono">MAVLink sysid {{ d.mavlink_sysid }} · {{ d.mavlink_address }} · {{ d.flight_mode }} · read-only</span>
+        } @else {
+          <span class="mono">ORION-{{ d.drone_id }} · {{ d.flight_mode }}</span>
+        }
+      </div>
+      <button type="button" class="close" aria-label="Close details" (click)="store.closeDetails()">×</button>
+    </header>
+
+    <div class="body">
+      @if (d.trust_status !== 'GREEN') {
+        <ul class="reasons">
+          @for (r of reasons(d); track r) {
+            <li>{{ r }}</li>
+          }
+        </ul>
+      }
+
+      <section>
+        <h3>Route home</h3>
+        @if (routeHome(); as r) {
+          <p [class.warn]="r.blocked">{{ r.text }}</p>
+          @if (r.why) {
+            <p class="dim">RTL blocked: {{ r.why }}</p>
+          }
+        }
+        @if (reserve(); as res) {
+          <p class="mono" [class.bad]="!res.ok" [class.good]="res.ok">
+            Battery reserve {{ res.ok ? 'OK' : 'LOW' }}: needs ≈{{ res.neededMin | number: '1.0-1' }} min, has ≈{{ res.availableMin | number: '1.0-0' }} min
+          </p>
+          <p class="dim mono">
+            ETA at {{ res.speed | number: '1.0-0' }} m/s{{ res.headwind ? ' (headwind ' + (res.headwind | number: '1.0-0') + ' m/s on the way)' : '' }} · estimate, keeps a 30% margin
+          </p>
+        }
+      </section>
+
+      <section>
+        <h3>Weather at drone</h3>
+        @if (weatherHere(); as wx) {
+          <p [class.bad]="wx.severe">{{ wx.text }}</p>
+          <p class="dim">{{ wx.effects }}</p>
+          @if (wx.severe) {
+            <p class="dim">Beyond the {{ platform.maxWindMs }} m/s limit: leave the cell (loiter and patrol are unsafe here).</p>
+          } @else {
+            <p class="dim">Within limits. Link and battery effects are weather, not EW, so trust isn't penalised for them.</p>
+          }
+        } @else {
+          <p class="dim">Clear: no weather cell over the drone.</p>
+        }
+      </section>
+
+      <section>
+        <h3>Trust breakdown</h3>
+        @for (s of signals(d); track s.label) {
+          <div class="sig status-{{ level(s.value) }}">
+            <div class="row">
+              <span class="lbl">{{ s.label }}</span>
+              <span class="track"><span class="fill" [style.width.%]="s.value"></span></span>
+              <span class="val mono">{{ s.value | number: '1.0-0' }}</span>
+            </div>
+            <p class="how">{{ s.how }}</p>
+          </div>
+        }
+        <p class="dim">Score = 30% GPS + 30% INS + 20% link + 20% peers, capped at 35 after an impossible jump or ≥100 m uncertainty. Green ≥ 75, yellow ≥ 40.</p>
+      </section>
+
+      <section>
+        <h3>Mesh (drone-to-drone)</h3>
+        @if (d.mesh; as m) {
+          <p [class.bad]="m.status === 'OUTLIER'" [class.good]="m.status === 'TRUSTED'">{{ meshStatus(m.status) }}</p>
+          @for (l of m.links; track l.peer_id) {
+            <div class="mesh-row" [class.off]="!l.consistent">
+              <span class="mono">D{{ l.peer_id }}</span>
+              <span class="mono">GPS {{ l.gps_distance_m | number: '1.0-0' }} m</span>
+              <span class="mono">radio {{ l.radio_range_m | number: '1.0-0' }} m</span>
+              <span>{{ l.consistent ? '✓' : '✕' }}</span>
+            </div>
+          }
+          <p class="dim">Each neighbour measures its range to this drone by radio time-of-flight, which a GPS spoofer can't fake, and compares it with the GPS positions. Range {{ meshRangeKm }} km.</p>
+        } @else {
+          <p class="dim">No mesh data (drone offline or landed).</p>
+        }
+      </section>
+
+      <section>
+        <h3>Position &amp; flight</h3>
+        <dl>
+          <dt>Position</dt><dd class="mono">{{ d.latitude | number: '1.5-5' }}, {{ d.longitude | number: '1.5-5' }}</dd>
+          <dt>Altitude</dt><dd class="mono">{{ d.altitude | number: '1.0-0' }} m</dd>
+          <dt>Speed / heading</dt><dd class="mono">{{ d.ground_speed | number: '1.0-1' }} m/s · {{ d.heading | number: '1.0-0' }}°</dd>
+          <dt>To base</dt><dd class="mono">{{ baseDistanceKm() | number: '1.1-1' }} km</dd>
+          <dt>Battery</dt><dd class="mono">{{ d.battery_remaining | number: '1.0-0' }}% · ≈{{ enduranceLeftMin() }} min left</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h3>Navigation (GNSS / INS)</h3>
+        <dl>
+          <dt>GPS fix</dt><dd class="mono">{{ fixLabel(d.fix_type) }} · {{ d.satellites_visible }} sats</dd>
+          <dt>Precision (EPH)</dt><dd class="mono">{{ d.eph | number: '1.1-1' }} m</dd>
+          <dt>Uncertainty</dt><dd class="mono">{{ d.uncertainty_radius_m > 0 ? '±' + (d.uncertainty_radius_m | number: '1.0-0') + ' m' : 'none' }}</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h3>Datalink</h3>
+        <dl>
+          <dt>Signal (RSSI)</dt><dd class="mono">{{ d.rssi | number: '1.0-0' }}</dd>
+          <dt>Packet loss</dt><dd class="mono">{{ d.drop_rate_comm | number: '1.0-1' }}%</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h3>Failsafe policy</h3>
+        <ul class="plain">
+          <li>Return-to-home only if the direct path avoids every hazard zone; otherwise a safe corridor or the A* route.</li>
+          <li>Link lost for 5 s: RTL if the path is clear, otherwise loiter.</li>
+          <li>Unsigned, expired or replayed commands are rejected and logged.</li>
+          <li>GPS restored after a few seconds in clean airspace.</li>
+          <li>Weather above {{ platform.maxWindMs }} m/s wind is a no-fly zone: alert and a recommendation to leave.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h3>Platform <span class="tag">simulated profile</span></h3>
+        <dl>
+          <dt>Type</dt><dd>{{ platform.type }}</dd>
+          <dt>Speed</dt><dd class="mono">{{ platform.patrolSpeedMs }} m/s patrol · {{ platform.egressSpeedMs }} m/s egress</dd>
+          <dt>Endurance</dt><dd class="mono">≈{{ platform.enduranceMin }} min</dd>
+          <dt>Max wind</dt><dd class="mono">{{ platform.maxWindMs }} m/s</dd>
+          <dt>Sensors</dt><dd>{{ platform.sensors }}</dd>
+          <dt>Datalink</dt><dd>{{ platform.datalink }}</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h3>Recent events</h3>
+        @for (e of recentEvents(); track e.id) {
+          <div class="event">
+            <span class="mono dim">#{{ e.id }} {{ e.timestamp | date: 'HH:mm:ss' }}</span>
+            <strong>{{ e.event_type }}</strong>
+            <span class="dim">{{ summary(e) }}</span>
+          </div>
+        } @empty {
+          <p class="dim">No events for this drone yet.</p>
+        }
+      </section>
+    </div>
+  </aside>
+}

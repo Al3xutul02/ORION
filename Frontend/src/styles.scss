@@ -1,1 +1,286 @@
-/* You can add global styles to this file, and also import other style files */
+@use 'maplibre-gl/dist/maplibre-gl.css';
+
+// ORION ground control theme: dark console, status colours reserved for trust state.
+:root {
+  --bg: #0b0f14;
+  --bg-elev: #111821;
+  --panel: #141c26;
+  --panel-2: #19232f;
+  --line: #233040;
+  --line-strong: #2f4054;
+  --text: #dbe5ef;
+  --text-dim: #8da0b3;
+  --text-faint: #5d7084;
+  --accent: #5cc8ff;
+  --accent-dim: #1d4a63;
+
+  --green: #3ddc84;
+  --green-bg: rgba(61, 220, 132, 0.12);
+  --yellow: #f5c542;
+  --yellow-bg: rgba(245, 197, 66, 0.12);
+  --red: #ff5463;
+  --red-bg: rgba(255, 84, 99, 0.14);
+  --violet: #b48cff;
+
+  --zone-base: #5cc8ff;
+  --zone-corridor: #3ddc84;
+  --zone-interference: #ff9f43;
+  --zone-threat: #ff5463;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+// ---- shared building blocks ------------------------------------------------------------
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+
+  h2 {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+}
+
+.panel-body {
+  padding: 12px;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+
+  &:hover:not(:disabled) {
+    background: #213042;
+    border-color: #3b5168;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04121c;
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      background: #84d6ff;
+    }
+  }
+
+  &.approve {
+    background: var(--green);
+    border-color: var(--green);
+    color: #03170b;
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      background: #6be8a3;
+    }
+  }
+
+  &.danger {
+    border-color: rgba(255, 84, 99, 0.5);
+    color: var(--red);
+  }
+
+  &.ghost {
+    background: transparent;
+    border-color: transparent;
+
+    &:hover:not(:disabled) {
+      background: var(--panel-2);
+    }
+  }
+
+  &.sm {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+
+  &.green { color: var(--green); background: var(--green-bg); border-color: transparent; }
+  &.yellow { color: var(--yellow); background: var(--yellow-bg); border-color: transparent; }
+  &.red { color: var(--red); background: var(--red-bg); border-color: transparent; }
+  &.accent { color: var(--accent); background: rgba(92, 200, 255, 0.1); border-color: transparent; }
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.status-GREEN { --status: var(--green); --status-bg: var(--green-bg); }
+.status-YELLOW { --status: var(--yellow); --status-bg: var(--yellow-bg); }
+.status-RED { --status: var(--red); --status-bg: var(--red-bg); }
+
+.empty {
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 12px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+// ---- MapLibre overrides ----------------------------------------------------------------
+
+.maplibregl-ctrl-group {
+  background: var(--panel) !important;
+  border: 1px solid var(--line);
+
+  button + button {
+    border-top-color: var(--line) !important;
+  }
+
+  button .maplibregl-ctrl-icon {
+    filter: invert(0.85);
+  }
+}
+
+// Map data credit (OpenStreetMap / OpenFreeMap) must stay visible on the real basemap.
+.maplibregl-ctrl-attrib {
+  background: rgba(11, 15, 20, 0.75) !important;
+  color: var(--text-faint);
+  font-size: 10px;
+
+  a {
+    color: var(--text-dim) !important;
+  }
+
+  .maplibregl-ctrl-attrib-button {
+    filter: invert(0.85);
+    background-color: transparent;
+  }
+}
+
+.maplibregl-ctrl-scale {
+  background: rgba(11, 15, 20, 0.7);
+  border-color: var(--text-dim);
+  color: var(--text-dim);
+}
+
+@media print {
+  :root {
+    --bg: #fff;
+    --panel: #fff;
+    --panel-2: #f3f5f8;
+    --line: #d5dbe3;
+    --text: #111;
+    --text-dim: #444;
+    --text-faint: #666;
+    color-scheme: light;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

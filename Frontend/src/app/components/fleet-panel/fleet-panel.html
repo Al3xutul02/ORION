@@ -1,0 +1,77 @@
+<section class="panel">
+  <header class="panel-head">
+    <h2>Fleet trust</h2>
+    <span class="spacer"></span>
+    @let c = store.fleetCounts();
+    <span class="chip green" title="Trusted">{{ c.green }}</span>
+    <span class="chip yellow" title="Degraded">{{ c.yellow }}</span>
+    <span class="chip red" title="Not trusted">{{ c.red }}</span>
+  </header>
+
+  <div class="panel-body list">
+    @for (d of store.drones(); track d.drone_id) {
+      <button
+        type="button"
+        class="card status-{{ d.trust_status }}"
+        [class.selected]="store.selectedDroneId() === d.drone_id"
+        (click)="store.selectDrone(d.drone_id)"
+      >
+        <div class="top">
+          <div class="score mono" [attr.aria-label]="'Trust score ' + (d.trust_score | number: '1.0-0')">
+            {{ d.trust_score | number: '1.0-0' }}
+          </div>
+          <div class="ident">
+            <strong>Drone {{ d.drone_id }}
+              @if (d.source === 'MAVLINK') {
+                <span class="chip accent" title="External MAVLink vehicle, monitored read-only">MAVLink</span>
+              }
+            </strong>
+            <span class="meta mono">{{ d.flight_mode }} · {{ d.altitude | number: '1.0-0' }} m · {{ d.battery_remaining | number: '1.0-0' }}%</span>
+          </div>
+          <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="0" x2="100" y1="6" y2="6" class="th" />
+            <line x1="0" x2="100" y1="14.4" y2="14.4" class="th" />
+            <polyline [attr.points]="sparkline(d.drone_id)" />
+          </svg>
+        </div>
+
+        <div class="bars">
+          @for (s of signals(d); track s.key) {
+            <div class="bar status-{{ level(s.value) }}">
+              <span class="lbl">{{ s.label }}</span>
+              <span class="track"><span class="fill" [style.width.%]="s.value"></span></span>
+              <span class="val mono">{{ s.value | number: '1.0-0' }}</span>
+            </div>
+          }
+        </div>
+
+        <div class="telemetry mono">
+          <span>SAT {{ d.satellites_visible }}</span>
+          <span>FIX {{ d.fix_type }}D</span>
+          <span>EPH {{ d.eph | number: '1.1-1' }}</span>
+          <span>RSSI {{ d.rssi | number: '1.0-0' }}</span>
+          <span>DROP {{ d.drop_rate_comm | number: '1.0-1' }}%</span>
+          @if (d.uncertainty_radius_m > 0) {
+            <span class="unc">±{{ d.uncertainty_radius_m | number: '1.0-0' }} m</span>
+          }
+        </div>
+
+        @if (d.trust_status !== 'GREEN') {
+          <ul class="reasons">
+            @for (r of reasons(d); track r) {
+              <li>{{ r }}</li>
+            }
+          </ul>
+        }
+      </button>
+    } @empty {
+      <p class="empty">
+        @if (store.mode() === 'live' && store.link() !== 'online') {
+          Waiting for telemetry from the backend…
+        } @else {
+          No telemetry yet. Press <strong>Start</strong> to run the scenario.
+        }
+      </p>
+    }
+  </div>
+</section>

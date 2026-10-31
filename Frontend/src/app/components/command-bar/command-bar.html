@@ -1,0 +1,155 @@
+<header class="bar">
+  <a class="brand" routerLink="/">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="5.5" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+    </svg>
+    <span class="name">ORION</span>
+    <span class="sub">Ground Control</span>
+  </a>
+
+  <nav class="tabs no-print">
+    <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Operations</a>
+    <a routerLink="/report" routerLinkActive="active">Report</a>
+  </nav>
+
+  <div class="mode no-print" role="group" aria-label="Data source">
+    <button type="button" [class.on]="store.mode() === 'live'" (click)="store.setMode('live')">Live</button>
+    <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Demo</button>
+  </div>
+
+  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'Deterministic 3-minute demo scenario'">
+    <span class="dot"></span>
+    @switch (store.mode() === 'offline' ? 'local' : store.link()) {
+      @case ('online') { Backend online }
+      @case ('connecting') { Connecting... }
+      @case ('offline') { Backend offline }
+      @default { Demo mode }
+    }
+  </span>
+
+  <span class="spacer"></span>
+
+  <div class="clock mono" aria-label="Mission time">
+    <span class="t">T+{{ clock() }}</span>
+    <span class="step">{{ store.mode() === 'offline' ? currentStep().label : 'Dynamic battlefield' }}</span>
+  </div>
+
+  <div class="controls no-print">
+    @if (store.running()) {
+      <button class="btn" type="button" (click)="store.pause()" [disabled]="store.busy()">Pause</button>
+    } @else {
+      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">Start</button>
+    }
+    <button class="btn" type="button" (click)="store.reset()" [disabled]="store.busy()">Reset</button>
+    @if (store.mode() === 'offline') {
+      <div class="speed" role="group" aria-label="Playback speed">
+        @for (s of speeds; track s) {
+          <button type="button" [class.on]="store.speed() === s" (click)="store.setSpeed(s)">{{ s }}&times;</button>
+        }
+      </div>
+    }
+    <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
+      {{ store.muted() ? '&#128263;' : '&#128266;' }}
+    </button>
+  </div>
+</header>
+
+<div class="timeline no-print">
+  @if (store.mode() === 'offline') {
+    <div class="track">
+      <div class="fill" [style.width.%]="progress()"></div>
+      @for (s of scenario(); track s.at) {
+        <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
+          <span class="pin"></span>
+          <span class="lbl">{{ s.label }}</span>
+        </span>
+      }
+    </div>
+    <div class="inject">
+      <span class="hint">Demo toys:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
+      <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
+      <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Mobile jammer</button>
+      <button class="btn sm" type="button" (click)="store.trigger('linkloss')">Link loss D5</button>
+      <span class="hint">Weather:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
+      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+        <span class="interval-label">Event interval:</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMin()"
+          (change)="onIntervalMinChange($event)"
+          title="Minimum seconds between random events"
+          aria-label="Minimum seconds"
+        />
+        <span class="interval-sep">&ndash;</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMax()"
+          (change)="onIntervalMaxChange($event)"
+          title="Maximum seconds between random events"
+          aria-label="Maximum seconds"
+        />
+        <span class="interval-unit">s</span>
+      </div>
+    </div>
+  } @else {
+    <div class="live-banner">
+      <span class="pulse-dot" [class.active]="store.running()"></span>
+      <span class="live-title">Live EW Simulation</span>
+      <span class="live-sub">{{ liveTheatreSummary() }} &middot; Random battlefield events occur automatically while running</span>
+    </div>
+    <div class="inject">
+      <span class="hint">Battlefield events:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">&#127922; Random event</button>
+      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+        <span class="interval-label">Interval:</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMin()"
+          (change)="onIntervalMinChange($event)"
+          title="Minimum seconds between random events"
+          aria-label="Minimum seconds"
+        />
+        <span class="interval-sep">&ndash;</span>
+        <input
+          type="number"
+          class="interval-input"
+          min="1"
+          max="120"
+          step="0.5"
+          [value]="store.randomIntervalMax()"
+          (change)="onIntervalMaxChange($event)"
+          title="Maximum seconds between random events"
+          aria-label="Maximum seconds"
+        />
+        <span class="interval-unit">s</span>
+      </div>
+      <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
+      <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
+      <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
+      <span class="hint">Weather:</span>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
+      <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
+    </div>
+  }
+</div>

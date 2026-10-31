@@ -1,0 +1,236 @@
+:host {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 6; // above the legend, which it may cover while open
+  width: min(340px, calc(100% - 20px));
+  max-height: calc(100% - 20px);
+  display: flex;
+}
+
+.details {
+  --status: var(--green);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  background: rgba(20, 28, 38, 0.97);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+
+  &.status-YELLOW { --status: var(--yellow); }
+  &.status-RED { --status: var(--red); }
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.score {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--status);
+}
+
+.ident {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+
+  span {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+}
+
+.close {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+.body {
+  overflow: auto;
+  padding: 4px 12px 12px;
+}
+
+section {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  color: var(--yellow);
+  background: var(--yellow-bg);
+}
+
+p {
+  margin: 0 0 3px;
+  font-size: 12px;
+
+  &.warn {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  &.good {
+    color: var(--green);
+  }
+
+  &.bad {
+    color: var(--red);
+    font-weight: 600;
+  }
+}
+
+.dim {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 12px;
+
+  dt {
+    color: var(--text-dim);
+  }
+
+  dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.reasons {
+  margin: 8px 0 2px;
+  padding: 6px 8px 6px 20px;
+  border-radius: var(--radius-sm);
+  background: var(--status-bg, var(--red-bg));
+  font-size: 11.5px;
+}
+
+.status-RED .reasons { background: var(--red-bg); }
+.status-YELLOW .reasons { background: var(--yellow-bg); }
+
+.sig {
+  --status: var(--green);
+  margin-bottom: 6px;
+
+  &.status-YELLOW { --status: var(--yellow); }
+  &.status-RED { --status: var(--red); }
+
+  .row {
+    display: grid;
+    grid-template-columns: 42px 1fr 26px;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+  }
+
+  .lbl {
+    color: var(--text-dim);
+  }
+
+  .track {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--line);
+    overflow: hidden;
+  }
+
+  .fill {
+    display: block;
+    height: 100%;
+    background: var(--status);
+  }
+
+  .val {
+    text-align: right;
+  }
+
+  .how {
+    margin: 2px 0 0;
+    font-size: 10.5px;
+    color: var(--text-faint);
+  }
+}
+
+.mesh-row {
+  display: grid;
+  grid-template-columns: 30px 1fr 1fr 16px;
+  gap: 6px;
+  font-size: 11.5px;
+  padding: 1px 0;
+  color: var(--text-dim);
+
+  &.off {
+    color: var(--red);
+  }
+}
+
+.plain {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+
+  li + li {
+    margin-top: 2px;
+  }
+}
+
+.event {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  font-size: 11.5px;
+
+  strong {
+    font-size: 11px;
+  }
+
+  & + .event {
+    border-top: 1px dashed var(--line);
+  }
+}

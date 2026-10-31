@@ -1,0 +1,106 @@
+<div
+  class="map"
+  #map
+  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'pick_loiter'"
+  [class.mode-delete]="store.mapMode() === 'delete_zone'"
+></div>
+
+<app-drone-details />
+
+<!-- Active Interaction Mode Floating Banner -->
+@if (store.mapMode() !== 'view') {
+  <div class="mode-banner">
+    @if (store.mapMode() === 'create_patrol') {
+      <span class="mode-icon">&#8853;</span>
+      <span class="mode-text">Click and drag on map to define patrol center and radius</span>
+    } @else if (store.mapMode() === 'create_threat') {
+      <span class="mode-icon danger">&#9888;</span>
+      <span class="mode-text">Click and drag on map to define restricted threat center and radius</span>
+    } @else if (store.mapMode() === 'create_corridor') {
+      <span class="mode-icon ok">&#10148;</span>
+      <span class="mode-text">Click waypoints on map ({{ corridorPoints.length }} points added). Double-click or click Finish.</span>
+      <button
+        type="button"
+        class="btn-finish-corridor"
+        [disabled]="corridorPoints.length < 2"
+        (click)="finishCorridor()"
+      >
+        &#10003; Finish Corridor ({{ corridorPoints.length }})
+      </button>
+    } @else if (store.mapMode() === 'delete_zone') {
+      <span class="mode-icon">&#10005;</span>
+      <span class="mode-text">Click on any tactical zone (patrol, threat, corridor) to delete it</span>
+    } @else if (store.mapMode() === 'pick_loiter') {
+      <span class="mode-icon">&#9678;</span>
+      <span class="mode-text">Click on map to select loiter destination</span>
+    }
+    <button type="button" class="btn-cancel-mode" (click)="cancelMapMode()">Cancel</button>
+  </div>
+}
+
+<div class="legend">
+  <span><i class="sw base"></i>Base</span>
+  <span><i class="sw patrol"></i>Patrol zone</span>
+  <span><i class="sw corridor"></i>Safe corridor</span>
+  <span><i class="sw interference"></i>Interference</span>
+  <span><i class="sw threat"></i>Threat</span>
+  <span><i class="sw weather"></i>Weather</span>
+  <span><i class="ring"></i>Uncertainty</span>
+  <span><i class="path blocked"></i>RTL blocked</span>
+  <span><i class="path route"></i>A* route</span>
+  <span><i class="path mesh"></i>Mesh link</span>
+  @if (basemap() === 'real') {
+    <span class="note">Exercise zones over a real map</span>
+  }
+</div>
+
+<div class="overlay-tr">
+  @if (store.sectorInterference()) {
+    <span class="chip yellow"><span class="dot"></span>Localized interference active</span>
+  }
+
+  <div class="zone-tools" role="group" aria-label="Tactical Zone Controls">
+    <button
+      type="button"
+      class="btn sm tool-btn"
+      [class.active]="store.mapMode() === 'create_patrol'"
+      (click)="toggleMapMode('create_patrol')"
+      title="Create new patrol zone by dragging on map"
+    >
+      + Patrol Zone
+    </button>
+    <button
+      type="button"
+      class="btn sm tool-btn corridor-btn"
+      [class.active]="store.mapMode() === 'create_corridor'"
+      (click)="toggleMapMode('create_corridor')"
+      title="Create new safe corridor by clicking waypoints"
+    >
+      + Safe Corridor
+    </button>
+    <button
+      type="button"
+      class="btn sm tool-btn threat-btn"
+      [class.active]="store.mapMode() === 'create_threat'"
+      (click)="toggleMapMode('create_threat')"
+      title="Create new threat zone by dragging on map"
+    >
+      + Threat Zone
+    </button>
+    <button
+      type="button"
+      class="btn sm tool-btn danger"
+      [class.active]="store.mapMode() === 'delete_zone'"
+      (click)="toggleMapMode('delete_zone')"
+      title="Delete an existing zone by clicking on it"
+    >
+      &#10005; Delete Zone
+    </button>
+  </div>
+
+  <div class="seg" role="group" aria-label="Basemap">
+    <button type="button" [class.on]="basemap() === 'real'" (click)="setBasemap('real')">Real map</button>
+    <button type="button" [class.on]="basemap() === 'grid'" (click)="setBasemap('grid')">Grid</button>
+  </div>
+  <button class="btn sm" type="button" (click)="recenter()">Recenter</button>
+</div>

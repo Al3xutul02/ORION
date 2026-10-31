@@ -1,0 +1,112 @@
+<div class="page">
+  <header class="head">
+    <div>
+      <p class="eyebrow">Post-action report</p>
+      <h1>{{ report()?.mission_id ?? 'ORION mission' }}</h1>
+      @if (report(); as r) {
+        <p class="meta">
+          Generated {{ r.generated_at | date: 'd MMM y, HH:mm:ss' }} ·
+          {{ store.mode() === 'offline' ? 'Demo scenario' : 'Live backend ledger' }} ·
+          Simulated, fictional theatre
+        </p>
+      }
+    </div>
+    <div class="actions no-print">
+      <button class="btn" type="button" (click)="generate()" [disabled]="loading()">{{ loading() ? 'Generating…' : 'Regenerate' }}</button>
+      <button class="btn" type="button" (click)="download()" [disabled]="!report()">Export JSON</button>
+      <button class="btn primary" type="button" (click)="print()" [disabled]="!report()">Print / PDF</button>
+    </div>
+  </header>
+
+  @if (report(); as r) {
+    <section class="verdict" [class.ok]="r.verification.is_valid" [class.bad]="!r.verification.is_valid">
+      <span class="seal" aria-hidden="true">{{ r.verification.is_valid ? '✓' : '!' }}</span>
+      <div>
+        <strong>{{ r.verification.is_valid ? 'Hash chain verified' : 'Hash chain broken' }}</strong>
+        <p>{{ r.verification.message }}</p>
+      </div>
+      <div class="stats">
+        <div><span class="n mono">{{ r.verification.total_events }}</span><span>records</span></div>
+        <div><span class="n mono">{{ attacks().length }}</span><span>attacks</span></div>
+        <div><span class="n mono">{{ decisions().length }}</span><span>decisions</span></div>
+      </div>
+    </section>
+
+    <div class="cols">
+      <section class="block">
+        <h2>Attacks &amp; threats detected</h2>
+        @for (e of attacks(); track e.id) {
+          <div class="item">
+            <span class="mono faint">{{ e.timestamp | date: 'HH:mm:ss' }}</span>
+            <strong>{{ e.event_type }}</strong>
+            <span>{{ summary(e) }}</span>
+          </div>
+        } @empty {
+          <p class="empty">None recorded.</p>
+        }
+      </section>
+
+      <section class="block">
+        <h2>Decisions and approvals</h2>
+        @for (e of decisions(); track e.id) {
+          <div class="item">
+            <span class="mono faint">{{ e.timestamp | date: 'HH:mm:ss' }}</span>
+            <strong>{{ e.event_type }}</strong>
+            <span>{{ summary(e) }} <em class="faint">— {{ e.operator_id }}</em></span>
+          </div>
+        } @empty {
+          <p class="empty">No operator decisions recorded.</p>
+        }
+        @if (approvers().length) {
+          <p class="approvers">Approved by: <strong>{{ approvers().join(', ') }}</strong></p>
+        }
+      </section>
+    </div>
+
+    <section class="block">
+      <h2>Full timeline</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Drone</th>
+            <th>Actor</th>
+            <th>Hash</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (e of r.timeline; track e.id; let i = $index) {
+            <tr
+              [class.broken]="r.verification.broken_at_index === i"
+              (click)="toggle(e.id)"
+              tabindex="0"
+              (keydown.enter)="toggle(e.id)"
+            >
+              <td class="mono">{{ e.id }}</td>
+              <td class="mono">{{ e.timestamp | date: 'HH:mm:ss' }}</td>
+              <td>
+                <strong>{{ e.event_type }}</strong>
+                <div class="faint">{{ summary(e) }}</div>
+              </td>
+              <td>{{ e.drone_id ?? '—' }}</td>
+              <td class="mono">{{ e.operator_id }}</td>
+              <td class="mono hash">{{ e.curr_hash.slice(0, 16) }}…</td>
+            </tr>
+            @if (expanded() === e.id) {
+              <tr class="detail">
+                <td colspan="6">
+                  <pre>{{ details(e) | json }}</pre>
+                  <div class="mono hashes">prev {{ e.prev_hash }}<br />curr {{ e.curr_hash }}</div>
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+    </section>
+  } @else if (!loading()) {
+    <p class="empty">Could not build the report. Check that the backend is reachable, or switch to Demo mode.</p>
+  }
+</div>
