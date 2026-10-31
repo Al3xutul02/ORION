@@ -1,6 +1,7 @@
 import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { computeMesh, describeMesh } from './mesh';
+import { spacingRates } from './patrol';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 
@@ -77,6 +78,8 @@ interface SimDrone {
   route: 'RTL' | 'CORRIDOR' | 'ROUTE';
   batteryUsed: number; // % drained; weather makes it drain faster
   weatherAlert: number | null; // id of the over-limit weather zone already reported
+  onOrbit: boolean; // flying the patrol orbit (not still on the way to it)
+  patrolRate: number; // rad/s around the orbit, set by the spacing coordinator (core/patrol.ts)
 }
 
 interface Jammer {
@@ -101,6 +104,8 @@ export class OfflineSimulator {
   private zones: Zone[] = [];
   private recs: Recommendation[] = [];
   private milestones = new Set<string>();
+  /** Drones on each sector's orbit at the last tick, by sector name. */
+  private patrolMembers = new Map<string, Set<number>>();
   private jammer: Jammer | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
@@ -137,8 +142,11 @@ export class OfflineSimulator {
     this.drones = fleet.map(([sector, angle], i) => ({
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
       safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
-      batteryUsed: 0, weatherAlert: null,
+      batteryUsed: 0, weatherAlert: null, onOrbit: true, patrolRate: ANGULAR_SPEED,
     }));
+    this.patrolMembers = new Map(
+      Object.values(SECTORS).map(s => [s.name, new Set(this.drones.filter(d => d.sector === s).map(d => d.id))]),
+    ); // the starting formation
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
     this.log('SYSTEM_INITIALIZED', null, {
@@ -166,6 +174,7 @@ export class OfflineSimulator {
 
     this.moveJammer(dt);
     this.driftWeather(dt);
+    this.coordinatePatrol();
     for (const d of this.drones) {
       this.move(d, dt);
       this.updateRecalibration(d, dt);
@@ -631,6 +640,34 @@ export class OfflineSimulator {
     }
   }
 
+  /** Keeps each sector's orbit evenly spaced; logs when a drone joins or leaves it. */
+  private coordinatePatrol(): void {
+    const members = new Map<string, Set<number>>();
+    for (const sector of Object.values(SECTORS)) {
+      const onOrbit = this.drones.filter(d => d.sector === sector && d.mode === 'PATROL' && d.onOrbit);
+      const rates = spacingRates(new Map(onOrbit.map(d => [d.id, d.angle])), ANGULAR_SPEED);
+      for (const d of onOrbit) d.patrolRate = rates.get(d.id)!;
+      members.set(sector.name, new Set(onOrbit.map(d => d.id)));
+    }
+    const previous = this.patrolMembers;
+    this.patrolMembers = members;
+    for (const [sector, now] of members) {
+      const before = previous.get(sector)!;
+      const joined = [...now].filter(i => !before.has(i)).sort((a, b) => a - b);
+      const left = [...before].filter(i => !now.has(i)).sort((a, b) => a - b);
+      if (!joined.length && !left.length) continue;
+      const single = joined.length + left.length === 1; // then the log row already names the drone
+      const change = single
+        ? `${joined.length ? 'Joined' : 'Left'} the ${sector} orbit`
+        : [...joined.map(i => `Drone ${i} joined`), ...left.map(i => `Drone ${i} left`)].join(', ') + ` (${sector})`;
+      const n = now.size;
+      this.log('PATROL_REBALANCED', single ? (joined[0] ?? left[0]) : null, {
+        description: `${change}: ${n} drone(s) on patrol` + (n >= 2 ? `, re-spacing to ${Math.round(360 / n)} deg apart` : ''),
+        sector, joined, left, patrol_drones: [...now].sort((a, b) => a - b),
+      }, 'ORION_PATROL');
+    }
+  }
+
   private linkDown(d: SimDrone): boolean {
     return d.linkLostAt !== null;
   }
@@ -643,11 +680,13 @@ export class OfflineSimulator {
       const dist = distanceM(d.lat, d.lon, targetLat, targetLon);
       const budget = EGRESS_SPEED_MS * dt;
       if (dt > 0 && dist > budget * 1.5) {
+        d.onOrbit = false;
         const f = budget / dist;
         d.lat += (targetLat - d.lat) * f;
         d.lon += (targetLon - d.lon) * f;
       } else {
-        d.angle += ANGULAR_SPEED * dt;
+        d.onOrbit = true;
+        d.angle += d.patrolRate * dt;
         d.lat = center.lat + orbit.lat * Math.sin(d.angle);
         d.lon = center.lon + orbit.lon * Math.cos(d.angle);
       }

@@ -31,6 +31,7 @@ const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
   OPERATOR_COMMAND: 'ok',
   GPS_RESTORED: 'ok',
   COMMAND_LINK_RESTORED: 'ok',
+  PATROL_REBALANCED: 'info',
 };
 
 @Component({

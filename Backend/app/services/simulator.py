@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Callable
 from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
 from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
-from app.services import mesh, weather
+from app.services import mesh, patrol, weather
 from app.services.mavlink_bridge import mavlink_input, mavlink_output
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
@@ -18,6 +18,7 @@ from app.models.audit import AuditLog
 logger = logging.getLogger("orion.simulator")
 
 EGRESS_SPEED_DEG_PER_SEC = 0.00022  # ~24 m/s in lat/lon degrees
+PATROL_ANGULAR_SPEED = 0.08  # rad/s around the orbit; patrol.py only ever slows a drone below it
 
 
 class OrionFleetSimulator:
@@ -79,6 +80,13 @@ class OrionFleetSimulator:
                 "egress_waypoints": [], "landed_until": 0.0, "safe_airspace_time": 0.0
             },
         }
+        for d in self.drones.values():
+            # Start exactly on the orbit at their slot (D1 east, D2 north, D3 west, D4 south),
+            # evenly spread, instead of crossing the sector to reach it.
+            d["lat"] = self.sector_center["lat"] + 0.003 * math.sin(d["offset_angle"])
+            d["lon"] = self.sector_center["lon"] + 0.004 * math.cos(d["offset_angle"])
+            d["on_orbit"] = True
+        self._patrol_members = frozenset(self.drones)  # the starting formation
         self.milestones_reached = {
             "spoofing_triggered": False,
             "rtl_blocked_recommended": False,
@@ -673,7 +681,7 @@ class OrionFleetSimulator:
 
         # PATROL mode: the drone holds its orbit physically (true frame); spoofing only
         # shifts what it reports, which is applied in _reported_position().
-        angular_speed = 0.08
+        angular_speed = PATROL_ANGULAR_SPEED
         patrol_radius_lat = 0.003
         patrol_radius_lon = 0.004
 
@@ -687,14 +695,46 @@ class OrionFleetSimulator:
 
         if dist_deg > step * 1.5:
             # Smoothly fly back to the patrol orbit entry point instead of teleporting
+            d_data["on_orbit"] = False
             d_data["lat"] += (dlat / dist_deg) * step
             d_data["lon"] += (dlon / dist_deg) * step
             d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
         else:
-            d_data["offset_angle"] += angular_speed * dt
+            d_data["on_orbit"] = True
+            d_data["offset_angle"] += d_data.get("patrol_rate", angular_speed) * dt
             d_data["lat"] = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
             d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
+
+    def _coordinate_patrol(self, db):
+        """Keeps the drones on the orbit evenly spaced; logs when one joins or leaves it."""
+        on_orbit = {i: d["offset_angle"] for i, d in self.drones.items() if d["mode"] == "PATROL" and d.get("on_orbit")}
+        for i, rate in patrol.spacing_rates(on_orbit, PATROL_ANGULAR_SPEED).items():
+            self.drones[i]["patrol_rate"] = rate
+        members = frozenset(on_orbit)
+        previous, self._patrol_members = self._patrol_members, members
+        if members == previous:
+            return
+        joined, left = sorted(members - previous), sorted(previous - members)
+        n = len(members)
+        single = len(joined) + len(left) == 1  # then the log row already names the drone
+        change = ("Joined the patrol orbit" if joined else "Left the patrol orbit") if single else ", ".join(
+            [f"Drone {i} joined" for i in joined] + [f"Drone {i} left" for i in left]
+        )
+        aar_service.log_event(
+            db=db,
+            event_type="PATROL_REBALANCED",
+            drone_id=(joined or left)[0] if single else None,
+            details={
+                "description": f"{change}: {n} drone(s) on patrol"
+                + (f", re-spacing to {360 / n:.0f} deg apart" if n >= 2 else ""),
+                "joined": joined,
+                "left": left,
+                "patrol_drones": sorted(members),
+                "mission_time_s": self.elapsed_time,
+            },
+            operator_id="ORION_PATROL",
+        )
 
     def _route_leg_blocked(self, d_data: Dict[str, Any]) -> bool:
         """True when the leg the drone is flying now crosses a hazard it isn't already inside."""
@@ -869,6 +909,7 @@ class OrionFleetSimulator:
                         operator_id="MET_SERVICE"
                     )
 
+                self._coordinate_patrol(db)
                 for d_id, d_data in self.drones.items():
                     self._move_drone(db, d_id, d_data, dt)
                     self._update_drone_recalibration(db, d_id, d_data, dt)
