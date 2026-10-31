@@ -61,6 +61,7 @@ export class TheatreMap implements OnDestroy {
   private drawCenter: [number, number] | null = null;
   readonly corridorPoints = signal<[number, number][]>([]);
   readonly objectivePoints = signal<[number, number][]>([]);
+  readonly threatPoints = signal<[number, number][]>([]);
 
   constructor() {
     afterNextRender(() => this.init());
@@ -248,11 +249,23 @@ export class TheatreMap implements OnDestroy {
     map.addSource('preview-corridor', { type: 'geojson', data: empty() });
     map.addLayer({
       id: 'preview-corridor-line', type: 'line', source: 'preview-corridor',
+      filter: ['==', ['geometry-type'], 'LineString'],
       paint: { 'line-color': '#3ddc84', 'line-width': 16, 'line-opacity': 0.22 },
     });
     map.addLayer({
       id: 'preview-corridor-core', type: 'line', source: 'preview-corridor',
+      filter: ['==', ['geometry-type'], 'LineString'],
       paint: { 'line-color': '#3ddc84', 'line-width': 2, 'line-dasharray': [4, 3] },
+    });
+    map.addLayer({
+      id: 'preview-corridor-points', type: 'circle', source: 'preview-corridor',
+      filter: ['==', ['geometry-type'], 'Point'],
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#3ddc84',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
     });
 
     map.addSource('preview-objective', { type: 'geojson', data: empty() });
@@ -278,6 +291,28 @@ export class TheatreMap implements OnDestroy {
       paint: {
         'circle-radius': 5,
         'circle-color': '#f59e0b',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
+    });
+
+    map.addSource('preview-threat', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'preview-threat-fill', type: 'fill', source: 'preview-threat',
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: { 'fill-color': '#ff5463', 'fill-opacity': 0.22 },
+    });
+    map.addLayer({
+      id: 'preview-threat-line', type: 'line', source: 'preview-threat',
+      filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'LineString']],
+      paint: { 'line-color': '#ff5463', 'line-width': 2.5, 'line-dasharray': [4, 3] },
+    });
+    map.addLayer({
+      id: 'preview-threat-points', type: 'circle', source: 'preview-threat',
+      filter: ['==', ['geometry-type'], 'Point'],
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#ff5463',
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff',
       },
@@ -338,7 +373,7 @@ export class TheatreMap implements OnDestroy {
             geometry: { type: 'Polygon', coordinates: [circleRing(z.center[0], z.center[1], z.radius_m)] },
           });
         }
-      } else if (z.zone_type === 'OBJECTIVE' && z.waypoints?.length) {
+      } else if ((z.geometry_type === 'POLYGON' || z.zone_type === 'OBJECTIVE' || z.zone_type === 'THREAT') && z.waypoints?.length) {
         const ring = z.waypoints.map(([la, lo]) => [lo, la]);
         if (ring.length >= 3) {
           if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) {
@@ -346,13 +381,13 @@ export class TheatreMap implements OnDestroy {
           }
           features.push({
             type: 'Feature',
-            properties: { ...props, is_objective: true },
+            properties: { ...props, is_objective: z.zone_type === 'OBJECTIVE', is_threat: z.zone_type === 'THREAT' },
             geometry: { type: 'Polygon', coordinates: [ring] },
           });
         } else if (ring.length === 2) {
           features.push({
             type: 'Feature',
-            properties: { ...props, is_objective: true, is_line: true },
+            properties: { ...props, is_objective: z.zone_type === 'OBJECTIVE', is_line: true },
             geometry: { type: 'LineString', coordinates: ring },
           });
         }
@@ -402,7 +437,7 @@ export class TheatreMap implements OnDestroy {
         anchorLngLat = [mid[1], mid[0]];
         anchorPos = 'left';
         offset = [14, 0];
-      } else if (z.zone_type === 'OBJECTIVE' && z.waypoints?.length) {
+      } else if ((z.zone_type === 'OBJECTIVE' || z.zone_type === 'THREAT') && z.waypoints?.length) {
         const lats = z.waypoints.map(p => p[0]);
         const lons = z.waypoints.map(p => p[1]);
         const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
@@ -548,6 +583,46 @@ export class TheatreMap implements OnDestroy {
     }
   }
 
+  private updateCorridorPreview(mouseLngLat?: [number, number]): void {
+    if (!this.map) return;
+    const pts = this.corridorPoints();
+    if (!pts.length) {
+      (this.map.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData(empty());
+      return;
+    }
+
+    const features: any[] = [];
+    for (const pt of pts) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: [pt[1], pt[0]] },
+      });
+    }
+
+    if (pts.length >= 2) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: pts.map(p => [p[1], p[0]]) },
+      });
+    }
+
+    if (mouseLngLat && pts.length >= 1) {
+      const last = pts[pts.length - 1];
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [[last[1], last[0]], mouseLngLat] },
+      });
+    }
+
+    (this.map.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }
+
   private updateObjectivePreview(mouseLngLat?: [number, number]): void {
     if (!this.map) return;
     const pts = this.objectivePoints();
@@ -597,6 +672,67 @@ export class TheatreMap implements OnDestroy {
     });
   }
 
+  private updateThreatPreview(mouseLngLat?: [number, number]): void {
+    if (!this.map) return;
+    const pts = this.threatPoints();
+    if (!pts.length) {
+      (this.map.getSource('preview-threat') as GeoJSONSource | undefined)?.setData(empty());
+      return;
+    }
+
+    const features: any[] = [];
+    for (const pt of pts) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: [pt[1], pt[0]] },
+      });
+    }
+
+    if (pts.length >= 3) {
+      const clean = orderPolygonVertices(pts);
+      const ring = clean.map(p => [p[1], p[0]]);
+      ring.push([ring[0][0], ring[0][1]]);
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [ring] },
+      });
+    } else if (pts.length === 2) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: pts.map(p => [p[1], p[0]]) },
+      });
+    }
+
+    if (mouseLngLat && pts.length >= 1) {
+      const last = pts[pts.length - 1];
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [[last[1], last[0]], mouseLngLat] },
+      });
+    }
+
+    (this.map.getSource('preview-threat') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }
+
+  protected finishThreat(): void {
+    const rawPts = this.threatPoints();
+    const cleanPts = orderPolygonVertices(rawPts);
+    if (cleanPts.length >= 3) {
+      const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'THREAT').length;
+      const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
+      const label = greek[count] ?? `Sector-${count + 1}`;
+      this.store.createThreatZone(`Restricted Threat Zone ${label}`, cleanPts);
+    }
+    this.cancelMapMode();
+  }
+
   protected finishObjective(): void {
     const rawPts = this.objectivePoints();
     const cleanPts = orderPolygonVertices(rawPts);
@@ -628,16 +764,18 @@ export class TheatreMap implements OnDestroy {
     this.drawCenter = null;
     this.corridorPoints.set([]);
     this.objectivePoints.set([]);
+    this.threatPoints.set([]);
     (this.map?.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
     (this.map?.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData(empty());
     (this.map?.getSource('preview-objective') as GeoJSONSource | undefined)?.setData(empty());
+    (this.map?.getSource('preview-threat') as GeoJSONSource | undefined)?.setData(empty());
     this.store.setMapMode('view');
   }
 
   private setupInteractions(map: MlMap): void {
     map.on('mousedown', e => {
       const mode = this.store.mapMode();
-      if ((mode === 'create_patrol' || mode === 'create_threat') && e.originalEvent.button === 0) {
+      if (mode === 'create_patrol' && e.originalEvent.button === 0) {
         this.isDrawingZone = true;
         this.drawCenter = [e.lngLat.lat, e.lngLat.lng];
         map.dragPan.disable();
@@ -649,8 +787,8 @@ export class TheatreMap implements OnDestroy {
       if (this.isDrawingZone && this.drawCenter) {
         const radiusM = distanceM(this.drawCenter[0], this.drawCenter[1], e.lngLat.lat, e.lngLat.lng);
         const ring = circleRing(this.drawCenter[0], this.drawCenter[1], Math.max(radiusM, 20));
-        const color = mode === 'create_threat' ? '#ff5463' : '#00d4ff';
-        const opacity = mode === 'create_threat' ? 0.15 : 0;
+        const color = '#00d4ff';
+        const opacity = 0;
         (map.getSource('preview-zone') as GeoJSONSource | undefined)?.setData({
           type: 'FeatureCollection',
           features: [{
@@ -659,8 +797,12 @@ export class TheatreMap implements OnDestroy {
             geometry: { type: 'Polygon', coordinates: [ring] },
           }],
         });
+      } else if (mode === 'create_corridor' && this.corridorPoints().length >= 1) {
+        this.updateCorridorPreview([e.lngLat.lng, e.lngLat.lat]);
       } else if (mode === 'create_objective' && this.objectivePoints().length >= 1) {
         this.updateObjectivePreview([e.lngLat.lng, e.lngLat.lat]);
+      } else if (mode === 'create_threat' && this.threatPoints().length >= 1) {
+        this.updateThreatPreview([e.lngLat.lng, e.lngLat.lat]);
       }
     });
 
@@ -671,18 +813,11 @@ export class TheatreMap implements OnDestroy {
         map.dragPan.enable();
         const radiusM = distanceM(this.drawCenter[0], this.drawCenter[1], e.lngLat.lat, e.lngLat.lng);
         (map.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
-        if (radiusM >= 60) {
-          if (mode === 'create_patrol') {
-            const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL').length;
-            const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
-            const label = greek[count] ?? `Zone-${count + 1}`;
-            this.store.createPatrolZone(`Patrol Zone ${label}`, this.drawCenter, radiusM);
-          } else if (mode === 'create_threat') {
-            const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'THREAT').length;
-            const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
-            const label = greek[count] ?? `Sector-${count + 1}`;
-            this.store.createThreatZone(`Restricted Threat Zone ${label}`, this.drawCenter, radiusM);
-          }
+        if (radiusM >= 60 && mode === 'create_patrol') {
+          const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL').length;
+          const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
+          const label = greek[count] ?? `Zone-${count + 1}`;
+          this.store.createPatrolZone(`Patrol Zone ${label}`, this.drawCenter, radiusM);
         }
         this.drawCenter = null;
         this.store.setMapMode('view');
@@ -692,17 +827,11 @@ export class TheatreMap implements OnDestroy {
     map.on('click', e => {
       const mode = this.store.mapMode();
       if (mode === 'create_corridor') {
-        this.corridorPoints.update(pts => [...pts, [e.lngLat.lat, e.lngLat.lng]]);
-        const pts = this.corridorPoints();
-        if (pts.length >= 2) {
-          (map.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData({
-            type: 'FeatureCollection',
-            features: [{
-              type: 'Feature',
-              properties: {},
-              geometry: { type: 'LineString', coordinates: pts.map(pt => [pt[1], pt[0]]) },
-            }],
-          });
+        const current = this.corridorPoints();
+        const newPt: [number, number] = [e.lngLat.lat, e.lngLat.lng];
+        if (!current.length || distanceM(current[current.length - 1][0], current[current.length - 1][1], newPt[0], newPt[1]) > 5) {
+          this.corridorPoints.update(pts => [...pts, newPt]);
+          this.updateCorridorPreview();
         }
       } else if (mode === 'create_objective') {
         const current = this.objectivePoints();
@@ -710,6 +839,13 @@ export class TheatreMap implements OnDestroy {
         if (!current.length || distanceM(current[current.length - 1][0], current[current.length - 1][1], newPt[0], newPt[1]) > 5) {
           this.objectivePoints.update(pts => [...pts, newPt]);
           this.updateObjectivePreview();
+        }
+      } else if (mode === 'create_threat') {
+        const current = this.threatPoints();
+        const newPt: [number, number] = [e.lngLat.lat, e.lngLat.lng];
+        if (!current.length || distanceM(current[current.length - 1][0], current[current.length - 1][1], newPt[0], newPt[1]) > 5) {
+          this.threatPoints.update(pts => [...pts, newPt]);
+          this.updateThreatPreview();
         }
       } else if (mode === 'delete_zone') {
         const clickedLat = e.lngLat.lat;
@@ -731,6 +867,26 @@ export class TheatreMap implements OnDestroy {
         });
         if (clickedCorridor) {
           this.store.deleteZone(clickedCorridor.id);
+          this.store.setMapMode('view');
+          return;
+        }
+        // Then threat zones (polygons or lines)
+        const activeThreats = this.store.zones().filter(z => z.is_active && z.zone_type === 'THREAT');
+        const clickedThreat = activeThreats.find(t => {
+          if (t.waypoints?.length) {
+            const nearVertex = t.waypoints.some(wp => distanceM(wp[0], wp[1], clickedLat, clickedLon) <= 220);
+            if (nearVertex) return true;
+            if (t.waypoints.length >= 3) {
+              return pointInPolygon(clickedLat, clickedLon, t.waypoints);
+            }
+          }
+          if (t.center && t.radius_m) {
+            return distanceM(t.center[0], t.center[1], clickedLat, clickedLon) <= t.radius_m;
+          }
+          return false;
+        });
+        if (clickedThreat) {
+          this.store.deleteZone(clickedThreat.id);
           this.store.setMapMode('view');
           return;
         }
@@ -762,6 +918,9 @@ export class TheatreMap implements OnDestroy {
       } else if (this.store.mapMode() === 'create_objective') {
         e.preventDefault();
         this.finishObjective();
+      } else if (this.store.mapMode() === 'create_threat') {
+        e.preventDefault();
+        this.finishThreat();
       }
     });
   }

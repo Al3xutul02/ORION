@@ -1,4 +1,4 @@
-import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, orderPolygonVertices, segmentIntersectsCircle, weatherAt } from './geo';
+import { ActionOption, circleRing, evaluateActions, egressPaths, distanceM, hazardZones, orderPolygonVertices, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { computeMesh, describeMesh } from './mesh';
 import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
@@ -58,7 +58,17 @@ const INITIAL_ZONES: Zone[] = [
     is_active: true, detected_by: 'PRECONFIGURED',
   },
   { id: 3, name: 'EW Jamming Zone Sector 4', zone_type: 'INTERFERENCE', geometry_type: 'CIRCLE', center: [44.328, 23.82], radius_m: 600, is_active: true, detected_by: 'PRECONFIGURED' },
-  { id: 4, name: 'Restricted Threat Zone Bravo', zone_type: 'THREAT', geometry_type: 'CIRCLE', center: [44.34, 23.84], radius_m: 500, is_active: true, detected_by: 'PRECONFIGURED' },
+  {
+    id: 4,
+    name: 'Restricted Threat Zone Bravo',
+    zone_type: 'THREAT',
+    geometry_type: 'POLYGON',
+    waypoints: [[44.3445, 23.84], [44.34225, 23.84545], [44.33775, 23.84545], [44.3355, 23.84], [44.33775, 23.83455], [44.34225, 23.83455]],
+    center: [44.34, 23.84],
+    radius_m: 500,
+    is_active: true,
+    detected_by: 'PRECONFIGURED',
+  },
   { id: 10, name: 'Patrol Zone Alpha', zone_type: 'PATROL', geometry_type: 'CIRCLE', center: [44.335, 23.83], radius_m: 350, is_active: true, detected_by: 'PRECONFIGURED' },
 ];
 
@@ -219,22 +229,37 @@ export class OfflineSimulator {
     return zone;
   }
 
-  addThreatZone(name: string, center: [number, number], radiusM: number): Zone {
+  addThreatZone(name: string, waypoints?: [number, number][], center?: [number, number], radiusM?: number): Zone {
     const count = this.zones.filter(z => z.zone_type === 'THREAT' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
     const label = greek[count] ?? `Sector-${count + 1}`;
+    let cleanPts: [number, number][];
+    let c: [number, number];
+    let r: number;
+    if (waypoints && waypoints.length >= 3) {
+      cleanPts = orderPolygonVertices(waypoints);
+      const cLat = cleanPts.reduce((a, b) => a + b[0], 0) / cleanPts.length;
+      const cLon = cleanPts.reduce((a, b) => a + b[1], 0) / cleanPts.length;
+      c = [cLat, cLon];
+      r = Math.max(...cleanPts.map(p => distanceM(cLat, cLon, p[0], p[1])));
+    } else {
+      c = center || [44.34, 23.84];
+      r = radiusM || 400;
+      cleanPts = circleRing(c[0], c[1], r, 6).slice(0, 6);
+    }
     const zone: Zone = {
       id: 300 + this.zones.length,
       name: name || `Restricted Threat Zone ${label}`,
       zone_type: 'THREAT',
-      geometry_type: 'CIRCLE',
-      center: [...center],
-      radius_m: radiusM,
+      geometry_type: 'POLYGON',
+      waypoints: cleanPts,
+      center: c,
+      radius_m: Math.round(r),
       is_active: true,
       detected_by: 'OPERATOR',
     };
     this.zones = [...this.zones, zone];
-    this.log('THREAT_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, center, radius_m: radiusM }, 'OPERATOR_1');
+    this.log('THREAT_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints, center: zone.center, radius_m: zone.radius_m }, 'OPERATOR_1');
     return zone;
   }
 

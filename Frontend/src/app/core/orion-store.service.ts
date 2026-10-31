@@ -465,15 +465,15 @@ export class OrionStore implements OnDestroy {
     this.pollLive();
   }
 
-  async createThreatZone(name: string, center: [number, number], radiusM: number): Promise<void> {
+  async createThreatZone(name: string, waypoints: [number, number][]): Promise<void> {
     if (this.offline) {
-      this.offline.addThreatZone(name, center, radiusM);
-      this.pushToast('warn', 'Threat zone established', `${name} (radius ${Math.round(radiusM)} m) active`);
+      this.offline.addThreatZone(name, waypoints);
+      this.pushToast('warn', 'Threat zone established', `${name} (${waypoints.length} vertices) active`);
       return;
     }
-    const res = await this.call(() => this.api.createThreatZone({ name, center, radius_m: radiusM }));
+    const res = await this.call(() => this.api.createThreatZone({ name, waypoints }));
     if (res) {
-      this.pushToast('warn', 'Threat zone established', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
+      this.pushToast('warn', 'Threat zone established', `${res.name} (${waypoints.length} vertices) active`);
     }
     this.pollLive();
   }

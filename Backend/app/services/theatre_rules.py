@@ -77,7 +77,8 @@ INITIAL_ZONES: List[Dict[str, Any]] = [
         "id": 4,
         "name": "Restricted Threat Zone Bravo",
         "zone_type": "THREAT",
-        "geometry_type": "CIRCLE",
+        "geometry_type": "POLYGON",
+        "waypoints": [[44.34555, 23.8415], [44.34352, 23.8464], [44.33948, 23.8464], [44.33745, 23.8415], [44.33948, 23.8366], [44.34352, 23.8366]],
         "center": [44.3415, 23.8415],
         "radius_m": 450.0,
         "is_active": True,
@@ -475,7 +476,7 @@ class TheatreRulesEngine:
         base_lon = self.home_base["lon"]
 
         for zone in self.blocking_zones():
-            if zone.get("geometry_type") == "CIRCLE":
+            if zone.get("center") and zone.get("radius_m"):
                 c_lat, c_lon = zone["center"]
                 r_m = zone["radius_m"]
                 # A storm the drone is already in doesn't block flying home: that's the way out of it.
@@ -569,26 +570,50 @@ class TheatreRulesEngine:
     def add_threat_zone(
         self,
         name: Optional[str],
-        center_lat: float,
-        center_lon: float,
-        radius_m: float
+        center_lat: Optional[float] = None,
+        center_lon: Optional[float] = None,
+        radius_m: Optional[float] = None,
+        waypoints: Optional[List[List[float]]] = None
     ) -> Dict[str, Any]:
-        """Creates a new operator-marked THREAT zone on the map."""
+        """Creates a new operator-marked THREAT zone on the map (polygonal or circular)."""
         if not name or not name.strip():
             count = len([z for z in self.zones if z.get("zone_type") == "THREAT" and z.get("is_active", True)])
             greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
             label = greek[count] if count < len(greek) else f"Sector-{count + 1}"
             name = f"Restricted Threat Zone {label}"
-        zone = {
-            "id": self._alloc_id(),
-            "name": name.strip(),
-            "zone_type": "THREAT",
-            "geometry_type": "CIRCLE",
-            "center": [round(center_lat, 5), round(center_lon, 5)],
-            "radius_m": round(max(50.0, min(1500.0, radius_m)), 1),
-            "is_active": True,
-            "detected_by": "OPERATOR"
-        }
+
+        if waypoints and len(waypoints) >= 3:
+            clean_pts = self._order_polygon_vertices(waypoints)
+            c_lat = sum(p[0] for p in clean_pts) / len(clean_pts)
+            c_lon = sum(p[1] for p in clean_pts) / len(clean_pts)
+            r_m = max(haversine_distance_m(c_lat, c_lon, p[0], p[1]) for p in clean_pts)
+            zone = {
+                "id": self._alloc_id(),
+                "name": name.strip(),
+                "zone_type": "THREAT",
+                "geometry_type": "POLYGON",
+                "waypoints": [[round(pt[0], 5), round(pt[1], 5)] for pt in clean_pts],
+                "center": [round(c_lat, 5), round(c_lon, 5)],
+                "radius_m": round(r_m, 1),
+                "is_active": True,
+                "detected_by": "OPERATOR"
+            }
+        else:
+            c_lat = center_lat if center_lat is not None else 44.34
+            c_lon = center_lon if center_lon is not None else 23.84
+            r_m = radius_m if radius_m is not None else 400.0
+            hex_pts = self._make_regular_polygon(c_lat, c_lon, r_m, 6)
+            zone = {
+                "id": self._alloc_id(),
+                "name": name.strip(),
+                "zone_type": "THREAT",
+                "geometry_type": "POLYGON",
+                "waypoints": hex_pts,
+                "center": [round(c_lat, 5), round(c_lon, 5)],
+                "radius_m": round(max(50.0, min(1500.0, r_m)), 1),
+                "is_active": True,
+                "detected_by": "OPERATOR"
+            }
         self.zones.append(zone)
         return zone
 
@@ -614,6 +639,19 @@ class TheatreRulesEngine:
         }
         self.zones.append(zone)
         return zone
+
+    @staticmethod
+    def _make_regular_polygon(lat: float, lon: float, radius_m: float, sides: int = 6) -> List[List[float]]:
+        import math
+        m_lat = 111139.0
+        m_lon = m_lat * math.cos(math.radians(lat))
+        pts = []
+        for i in range(sides):
+            angle = math.radians(i * (360.0 / sides))
+            dlat = (radius_m * math.cos(angle)) / m_lat
+            dlon = (radius_m * math.sin(angle)) / m_lon
+            pts.append([round(lat + dlat, 5), round(lon + dlon, 5)])
+        return pts
 
     @staticmethod
     def _order_polygon_vertices(waypoints: List[List[float]]) -> List[List[float]]:
@@ -789,7 +827,7 @@ class TheatreRulesEngine:
             hazards = [
                 (z["center"][0], z["center"][1], z["radius_m"], z["name"], False)
                 for z in self.active_danger_zones()
-                if z.get("geometry_type") == "CIRCLE" and z.get("zone_type") == "THREAT"
+                if z.get("center") and z.get("radius_m") and z.get("zone_type") == "THREAT"
             ] + [
                 (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
                 for z in self.zones
@@ -802,7 +840,7 @@ class TheatreRulesEngine:
             hazards = [
                 (z["center"][0], z["center"][1], z["radius_m"], z["name"], False)
                 for z in self.blocking_zones()
-                if z.get("geometry_type") == "CIRCLE"
+                if z.get("center") and z.get("radius_m")
             ] + [
                 (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
                 for z in self.active_weather_zones()
@@ -816,7 +854,7 @@ class TheatreRulesEngine:
         hazards = [
             (z["center"][0], z["center"][1], z["radius_m"], z["name"])
             for z in self.blocking_zones()
-            if z.get("geometry_type") == "CIRCLE"
+            if z.get("center") and z.get("radius_m")
         ] + [
             (z["center"][0], z["center"][1], z["radius_m"], z["name"], True)
             for z in self.active_weather_zones()

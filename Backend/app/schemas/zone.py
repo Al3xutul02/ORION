@@ -35,8 +35,9 @@ class CreatePatrolZoneRequest(BaseModel):
 
 class CreateThreatZoneRequest(BaseModel):
     name: Optional[str] = None
-    center: List[float] = Field(..., description="[lat, lon]")
-    radius_m: float = Field(..., gt=0)
+    center: Optional[List[float]] = Field(None, description="[lat, lon]")
+    radius_m: Optional[float] = Field(None, gt=0)
+    waypoints: Optional[List[List[float]]] = Field(None, min_length=3, description="List of [lat, lon] polygon vertices")
 
 
 class CreateSafeCorridorRequest(BaseModel):

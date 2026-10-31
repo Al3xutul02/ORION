@@ -445,6 +445,17 @@
       opacity: 0.45;
       cursor: not-allowed;
     }
+
+    &.btn-finish-threat {
+      border-color: var(--zone-threat);
+      background: rgba(255, 84, 99, 0.25);
+      color: #fff;
+
+      &:hover:not(:disabled) {
+        background: var(--zone-threat);
+        color: #0b0f14;
+      }
+    }
   }
 
   .btn-cancel-mode {

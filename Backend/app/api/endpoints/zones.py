@@ -66,7 +66,7 @@ def get_zones_geojson():
                 })
         elif g_type in ("POLYGON", "LINE"):
             coords = [[pt[1], pt[0]] for pt in z.get("waypoints", [])]
-            if z_type == "OBJECTIVE" and len(coords) >= 3:
+            if z_type in ("OBJECTIVE", "THREAT") and len(coords) >= 3:
                 poly_coords = list(coords)
                 if poly_coords and poly_coords[0] != poly_coords[-1]:
                     poly_coords.append(poly_coords[0])
@@ -160,12 +160,13 @@ def delete_zone(zone_id: int, db: Session = Depends(get_db)):
 
 @router.post("/threat")
 def create_threat_zone(payload: CreateThreatZoneRequest, db: Session = Depends(get_db)):
-    """Creates a new operator-marked threat zone on the map."""
+    """Creates a new operator-marked threat zone on the map (polygon or circle)."""
     zone = theatre_rules.add_threat_zone(
         name=payload.name,
-        center_lat=payload.center[0],
-        center_lon=payload.center[1],
-        radius_m=payload.radius_m
+        center_lat=payload.center[0] if payload.center else None,
+        center_lon=payload.center[1] if payload.center else None,
+        radius_m=payload.radius_m,
+        waypoints=payload.waypoints
     )
     aar_service.log_event(
         db=db,
@@ -174,8 +175,9 @@ def create_threat_zone(payload: CreateThreatZoneRequest, db: Session = Depends(g
         details={
             "zone_id": zone["id"],
             "name": zone["name"],
-            "center": zone["center"],
-            "radius_m": zone["radius_m"]
+            "waypoints": zone.get("waypoints"),
+            "center": zone.get("center"),
+            "radius_m": zone.get("radius_m")
         },
         operator_id="OPERATOR_1"
     )

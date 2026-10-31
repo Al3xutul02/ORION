@@ -15,7 +15,15 @@
       <span class="mode-text">Click and drag on map to define patrol center and radius</span>
     } @else if (store.mapMode() === 'create_threat') {
       <span class="mode-icon danger">&#9888;</span>
-      <span class="mode-text">Click and drag on map to define restricted threat center and radius</span>
+      <span class="mode-text">Click vertices on map ({{ threatPoints().length }} added). Double-click or click Finish (min 3 points).</span>
+      <button
+        type="button"
+        class="btn-finish-corridor btn-finish-threat"
+        [disabled]="threatPoints().length < 3"
+        (click)="finishThreat()"
+      >
+        &#10003; Finish Threat Zone ({{ threatPoints().length }})
+      </button>
     } @else if (store.mapMode() === 'create_corridor') {
       <span class="mode-icon ok">&#10148;</span>
       <span class="mode-text">Click waypoints on map ({{ corridorPoints().length }} points added). Double-click or click Finish.</span>
