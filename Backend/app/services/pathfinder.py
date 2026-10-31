@@ -6,6 +6,9 @@ are blocked; cells just outside it cost more, so routes keep their distance. A h
 drone (or the goal) is already inside can be crossed, at a higher cost, so the planner can
 get it out. The grid path is then straightened into as few legs as possible.
 
+A hazard can also be "soft" (weather within the platform's limits): never blocked, it just
+costs more to cross, so the route skirts it when that's cheap and goes through when it isn't.
+
 Mirrored in Frontend/src/app/core/pathfinding.ts; keep the two in step.
 """
 import heapq
@@ -16,11 +19,12 @@ M_PER_DEG_LAT = 111139.0
 CELL_M = 75.0          # grid resolution
 MARGIN_M = 120.0       # never fly closer than this to a hazard's edge
 SOFT_M = 300.0         # beyond the margin, flying this close still costs extra
+SOFT_ZONE_COST = 2.0   # extra cost per metre inside a soft (weather) zone
 PAD_M = 1500.0         # how far the grid extends beyond start, goal and hazards
 MAX_CELLS_PER_SIDE = 260
 
-# (lat, lon, radius_m, name)
-Hazard = Tuple[float, float, float, str]
+# (lat, lon, radius_m, name) or (lat, lon, radius_m, name, soft)
+Hazard = Tuple
 
 
 class _Projection:
@@ -57,12 +61,13 @@ def plan_route(
     proj = _Projection((start[0] + goal[0]) / 2, (start[1] + goal[1]) / 2)
     sx, sy = proj.to_xy(*start)
     gx, gy = proj.to_xy(*goal)
-    circles = [(*proj.to_xy(lat, lon), r, name) for lat, lon, r, name in hazards]
+    circles = [(*proj.to_xy(h[0], h[1]), h[2], h[3]) for h in hazards]
+    soft = {i for i, h in enumerate(hazards) if len(h) > 4 and h[4]}
 
     # Hazards around the start or goal are crossable, otherwise there'd be no way out (or in).
     escape = {
         i for i, (cx, cy, r, _) in enumerate(circles)
-        if math.hypot(sx - cx, sy - cy) <= r + MARGIN_M or math.hypot(gx - cx, gy - cy) <= r + MARGIN_M
+        if i not in soft and (math.hypot(sx - cx, sy - cy) <= r + MARGIN_M or math.hypot(gx - cx, gy - cy) <= r + MARGIN_M)
     }
 
     xs = [sx, gx] + [c[0] - c[2] for c in circles] + [c[0] + c[2] for c in circles]
@@ -90,6 +95,10 @@ def plan_route(
         mult = 1.0
         for i, (cx, cy, rad, _) in enumerate(circles):
             edge = math.hypot(x - cx, y - cy) - rad
+            if i in soft:
+                if edge < 0:
+                    mult += SOFT_ZONE_COST
+                continue
             if i in escape:
                 if edge < 0:
                     mult += 2.0  # leave the zone we're in as directly as possible
@@ -139,11 +148,22 @@ def plan_route(
     cells.reverse()
     points = [(sx, sy)] + [centre(*c) for c in cells[1:-1]] + [(gx, gy)]
 
+    def inside(pt: Tuple[float, float], i: int) -> bool:
+        cx, cy, rad, _ = circles[i]
+        return math.hypot(pt[0] - cx, pt[1] - cy) <= rad
+
     def clear(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
-        return all(
-            _segment_point_distance(*a, *b, cx, cy) > rad + MARGIN_M * 0.9
-            for i, (cx, cy, rad, _) in enumerate(circles) if i not in escape
-        )
+        for i, (cx, cy, rad, _) in enumerate(circles):
+            if i in escape:
+                continue
+            if i in soft:
+                # Shortcuts may not cut into soft weather the grid route chose to go around.
+                if not (inside(a, i) or inside(b, i)) and _segment_point_distance(*a, *b, cx, cy) <= rad:
+                    return False
+                continue
+            if _segment_point_distance(*a, *b, cx, cy) <= rad + MARGIN_M * 0.9:
+                return False
+        return True
 
     # String-pulling: from each kept point, jump to the farthest point still in clear line of sight.
     smoothed = [points[0]]

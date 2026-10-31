@@ -108,6 +108,15 @@ p {
     color: var(--accent);
     font-weight: 600;
   }
+
+  &.good {
+    color: var(--green);
+  }
+
+  &.bad {
+    color: var(--red);
+    font-weight: 600;
+  }
 }
 
 .dim {

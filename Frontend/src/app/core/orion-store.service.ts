@@ -25,7 +25,11 @@ export type Trigger =
   | 'corridor-appear'
   | 'corridor-disappear'
   | 'danger-appear'
-  | 'danger-disappear';
+  | 'danger-disappear'
+  | 'weather-storm'
+  | 'weather-rain'
+  | 'weather-wind'
+  | 'weather-clear';
 
 const HISTORY_LEN = 90;
 
@@ -46,6 +50,9 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
   MISSION_REPORT_READY: { level: 'info', title: 'Post-action report ready' },
   DRONE_RECOVERED: { level: 'ok', title: 'Drone recovered at base' },
   ROUTE_REPLANNED: { level: 'warn', title: 'Route re-planned' },
+  WEATHER_CELL_DETECTED: { level: 'warn', title: 'Weather moving in' },
+  WEATHER_LIMIT_EXCEEDED: { level: 'critical', title: 'Drone beyond weather limits' },
+  WEATHER_CLEARED: { level: 'ok', title: 'Weather cleared' },
   GPS_DEGRADED_SINGLE: { level: 'warn', title: 'GPS lost on one drone' },
   COMMAND_LINK_LOST: { level: 'critical', title: 'Command link lost' },
   FAILSAFE_APPLIED: { level: 'warn', title: 'Failsafe applied' },
@@ -313,10 +320,20 @@ export class OrionStore implements OnDestroy {
       if (kind === 'replay') this.offline.triggerReplay();
       if (kind === 'interference') this.offline.triggerInterference();
       if (kind === 'linkloss') this.offline.triggerLinkLoss();
+      if (kind === 'weather-storm') this.offline.triggerWeather('STORM');
+      if (kind === 'weather-rain') this.offline.triggerWeather('RAIN');
+      if (kind === 'weather-wind') this.offline.triggerWeather('WIND');
+      if (kind === 'weather-clear') this.offline.clearWeather();
       return;
     }
     if (kind === 'linkloss') return; // Demo-only scenario beat
-    const actionMap: Record<Exclude<Trigger, 'linkloss'>, SimulationAction> = {
+    if (kind === 'weather-storm' || kind === 'weather-rain' || kind === 'weather-wind') {
+      const wx = ({ 'weather-storm': 'STORM', 'weather-rain': 'RAIN', 'weather-wind': 'WIND' } as const)[kind];
+      await this.call(() => this.api.weatherAppear(wx));
+      this.pollLive();
+      return;
+    }
+    const actionMap: Record<Exclude<Trigger, 'linkloss' | 'weather-storm' | 'weather-rain' | 'weather-wind'>, SimulationAction> = {
       random: 'trigger-random',
       spoofing: 'trigger-spoofing',
       replay: 'trigger-replay',
@@ -325,6 +342,7 @@ export class OrionStore implements OnDestroy {
       'corridor-disappear': 'trigger-corridor-disappear',
       'danger-appear': 'trigger-danger-appear',
       'danger-disappear': 'trigger-danger-disappear',
+      'weather-clear': 'trigger-weather-clear',
     };
     const action = actionMap[kind];
     await this.call(() => this.api.simulation(action));

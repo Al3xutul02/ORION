@@ -7,12 +7,14 @@ import { circleRing, egressPaths, evaluateActions } from '../../core/geo';
 import { DroneState, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 import { DroneDetails } from '../drone-details/drone-details';
+import { describeWeather } from '../../core/platform';
 
 const ZONE_COLORS: Record<string, string> = {
   BASE: '#5cc8ff',
   SAFE_CORRIDOR: '#3ddc84',
   INTERFERENCE: '#ff9f43',
   THREAT: '#ff5463',
+  WEATHER: '#b48cff',
 };
 const STATUS_COLORS: Record<string, string> = { GREEN: '#3ddc84', YELLOW: '#f5c542', RED: '#ff5463' };
 
@@ -234,7 +236,8 @@ export class TheatreMap implements OnDestroy {
       }
       const el = document.createElement('div');
       el.className = `zone-label zone-${z.zone_type}`;
-      el.innerHTML = `<span>${escapeHtml(z.name)}</span>${z.detected_by !== 'PRECONFIGURED' ? '<em>marked by ORION</em>' : ''}`;
+      const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : z.detected_by !== 'PRECONFIGURED' ? 'marked by ORION' : '';
+      el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
       const isArea = !!(z.center && z.radius_m);
       const marker = new maplibregl.Marker({ element: el, anchor: isArea ? 'center' : 'left', offset: isArea ? [0, -14] : [12, 0] })
         .setLngLat([anchor[1], anchor[0]])

@@ -1,6 +1,7 @@
-import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle } from './geo';
+import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
+import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { HashChainLedger } from './hash-chain';
-import { DroneState, FleetUpdate, Recommendation, TrustStatus, Zone } from './models';
+import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 
 /**
  * Plan B from the spec, extended into a fuller (simulated, defensive) conflict exercise over
@@ -36,6 +37,16 @@ const SCRIPT = { spoof: 30, recommend: 60, replay: 100, jammer: 112, linkLoss: 1
 
 const DYNAMIC_ZONE_ID = 100;
 
+// Where each weather kind enters the Demo theatre and how it drifts (m/s north, m/s east),
+// chosen so the storm crosses Sector 7 and the rain sits over the base and corridor.
+const WEATHER_ENTRY: Record<WeatherKind, { center: [number, number]; driftMs: [number, number] }> = {
+  STORM: { center: [44.351, 23.866], driftMs: [-1.5, -8] },
+  RAIN: { center: [44.324, 23.806], driftMs: [0.4, 2.5] },
+  WIND: { center: [44.338, 23.848], driftMs: [3, 0.5] },
+};
+const WEATHER_BOUNDS = { lat: [44.3, 44.365], lon: [23.775, 23.875] };
+const M_PER_DEG_LAT = 111139;
+
 const INITIAL_ZONES: Zone[] = [
   { id: 1, name: 'Base Forward Alpha', zone_type: 'BASE', geometry_type: 'CIRCLE', center: [44.316, 23.8], radius_m: 350, is_active: true, detected_by: 'PRECONFIGURED' },
   {
@@ -63,6 +74,8 @@ interface SimDrone {
   egressPath: [number, number][]; // [lon, lat]
   egressLeg: number;
   route: 'RTL' | 'CORRIDOR' | 'ROUTE';
+  batteryUsed: number; // % drained; weather makes it drain faster
+  weatherAlert: number | null; // id of the over-limit weather zone already reported
 }
 
 interface Jammer {
@@ -123,6 +136,7 @@ export class OfflineSimulator {
     this.drones = fleet.map(([sector, angle], i) => ({
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
       safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
+      batteryUsed: 0, weatherAlert: null,
     }));
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
@@ -150,13 +164,102 @@ export class OfflineSimulator {
     if (this.elapsed >= SCRIPT.report) this.markReportReady();
 
     this.moveJammer(dt);
+    this.driftWeather(dt);
     for (const d of this.drones) {
       this.move(d, dt);
       this.updateRecalibration(d, dt);
+      this.updateWeather(d, dt);
     }
     this.updateJamming();
     this.updateLinks();
     this.emit();
+  }
+
+  // ---- weather -----------------------------------------------------------------------------
+
+  private nextWeatherId = 200;
+
+  /** Brings a weather cell into the theatre (only from the buttons; the scripted timeline has none). */
+  triggerWeather(kind: WeatherKind): void {
+    const active = this.zones.filter(z => z.is_active && isWeather(z));
+    if (active.length >= 2) active[0].is_active = false;
+    const tpl = WEATHER_TEMPLATES[kind];
+    const { center, driftMs } = WEATHER_ENTRY[kind];
+    const zone: Zone = {
+      id: this.nextWeatherId++, ...tpl, zone_type: 'WEATHER', geometry_type: 'CIRCLE', center: [...center],
+      is_active: true, detected_by: 'MET_SERVICE', weather: kind,
+      drift: [driftMs[0] / M_PER_DEG_LAT, driftMs[1] / (M_PER_DEG_LAT * Math.cos((center[0] * Math.PI) / 180))],
+    };
+    this.zones = [...this.zones, zone];
+    this.log('WEATHER_CELL_DETECTED', null, {
+      zone: zone.name, description: `${zone.name} entering the theatre: ${describeWeather(zone)}`, blocks_flight: isSevereWeather(zone),
+    }, 'MET_SERVICE');
+  }
+
+  clearWeather(): void {
+    const zone = this.zones.find(z => z.is_active && isWeather(z));
+    if (!zone) return;
+    zone.is_active = false;
+    this.zones = [...this.zones];
+    this.log('WEATHER_CLEARED', null, { zone: zone.name, description: `${zone.name} has dissipated` }, 'MET_SERVICE');
+  }
+
+  private driftWeather(dt: number): void {
+    let moved = false;
+    for (const z of this.zones) {
+      if (!z.is_active || !isWeather(z) || !z.drift) continue;
+      z.center = [z.center![0] + z.drift[0] * dt, z.center![1] + z.drift[1] * dt];
+      moved = true;
+      const [lat, lon] = z.center;
+      if (lat < WEATHER_BOUNDS.lat[0] || lat > WEATHER_BOUNDS.lat[1] || lon < WEATHER_BOUNDS.lon[0] || lon > WEATHER_BOUNDS.lon[1]) {
+        z.is_active = false;
+        this.log('WEATHER_CLEARED', null, { zone: z.name, description: `${z.name} drifted out of the theatre` }, 'MET_SERVICE');
+      }
+    }
+    if (moved) this.zones = [...this.zones];
+  }
+
+  /** Battery drain under wind, and the alert + recommendation when a drone is caught beyond limits. */
+  private updateWeather(d: SimDrone, dt: number): void {
+    const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+    const wx = weatherAt(this.zones, d.lat + off.lat, d.lon + off.lon);
+    if (d.mode !== 'LANDED') d.batteryUsed += 0.1 * dt * weatherEffects(wx).batteryMult;
+    if (!wx || !isSevereWeather(wx)) {
+      d.weatherAlert = null;
+      return;
+    }
+    if (d.weatherAlert === wx.id || (d.mode !== 'PATROL' && d.mode !== 'LOITER')) return;
+    d.weatherAlert = wx.id;
+    this.log('WEATHER_LIMIT_EXCEEDED', d.id, { zone: wx.name, reason: `${wx.name}: ${describeWeather(wx)}. Leave the cell` }, 'ORION_THEATRE_RULES');
+    this.recommendFor(d.id, 'WEATHER_LIMIT_EXCEEDED');
+  }
+
+  /** A recommendation built from the current action matrix (used for weather; the scripted D2 one stays as is). */
+  private recommendFor(droneId: number, trigger: string): void {
+    if (this.recs.some(r => r.drone_id === droneId && r.status === 'PENDING')) return;
+    const state = this.states().find(s => s.drone_id === droneId)!;
+    const actions = evaluateActions(state, this.zones);
+    const rtl = actions.find(a => a.id === 'RETURN_TO_HOME')!;
+    const pick = actions.find(a => a.recommended && a.id !== 'LOITER') ?? actions.find(a => a.id === 'LOITER')!;
+    const rec: Recommendation = {
+      id: this.recs.length + 1,
+      drone_id: droneId,
+      timestamp: new Date().toISOString(),
+      trigger_event: trigger,
+      blocked_action: rtl.allowed ? 'NONE' : 'RETURN_TO_HOME',
+      blocked_reason: rtl.allowed ? 'Direct path to base is clear' : `Direct Return-to-Home route blocked: ${rtl.reason}`,
+      recommended_action: pick.id,
+      recommendation_details: `${pick.label}: ${pick.reason}`,
+      status: 'PENDING',
+      operator_id: null,
+      approved_at: null,
+    };
+    this.recs = [rec, ...this.recs];
+    this.log('RECOMMENDATION_ISSUED', droneId, {
+      recommendation_id: rec.id, blocked_action: rec.blocked_action,
+      blocked_reason: rec.blocked_reason, recommended_action: rec.recommended_action,
+    }, 'ORION_THEATRE_RULES');
+    this.cb.onRecommendations(this.recs);
   }
 
   // ---- scenario triggers (also used by the manual buttons) -------------------------------
@@ -588,6 +691,12 @@ export class OfflineSimulator {
       if (spoofed) { lat += SPOOF_OFFSET.lat; lon += SPOOF_OFFSET.lon; sats = 4; eph = 4.2; fix = 2; }
       if (jammed) { sats = 3; fix = 1; eph = 6.0; drop = 35; rssi = 25; }
       if (linkLost) { drop = 95; rssi = 3; }
+      // Weather degrades the link and position hold; ORION knows it's weather, not EW.
+      const wx = weatherAt(this.zones, lat, lon);
+      const fx = weatherEffects(wx);
+      drop = Math.round((drop + fx.dropAdd) * 10) / 10;
+      rssi = Math.max(0, rssi - fx.rssiLoss);
+      eph = Math.round((eph + fx.ephAdd) * 100) / 100;
 
       let gps = fix < 2 ? 0 : fix === 2 ? 40 : 100;
       if (sats < 4) gps = Math.min(gps, 10); else if (sats < 6) gps = Math.min(gps, 40); else if (sats < 9) gps = Math.min(gps, 75);
@@ -617,6 +726,7 @@ export class OfflineSimulator {
       const link = Math.max(0, Math.min(100, rssi, 100 - drop * 2));
       if (linkLost) reasons.push('Command link lost: onboard failsafe in control');
       else if (link < 60) reasons.push('Command link degraded');
+      if (wx) reasons.push(`Weather: ${wx.name} (${describeWeather(wx)}), link/battery effects are weather, not EW`);
 
       let score = 0.3 * gps + 0.3 * imu + 0.2 * link + 0.2 * consensus;
       if (imu <= 20 || unc >= 100) score = Math.min(score, 35);
@@ -631,7 +741,7 @@ export class OfflineSimulator {
         ground_speed: d.mode === 'PATROL' ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,
         heading: ((d.angle * 180) / Math.PI + 90) % 360,
         fix_type: fix, satellites_visible: sats, eph,
-        battery_remaining: Math.max(20, 100 - this.elapsed * 0.1),
+        battery_remaining: Math.round(Math.max(20, 100 - d.batteryUsed) * 10) / 10,
         drop_rate_comm: drop, rssi, flight_mode: flightMode, is_armed: d.mode !== 'LANDED',
         trust_score: score, trust_status: status, uncertainty_radius_m: unc, reason,
         scores: {

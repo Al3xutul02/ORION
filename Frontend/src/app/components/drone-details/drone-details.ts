@@ -1,24 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ORION_CONFIG } from '../../core/config';
-import { describeRoute, distanceM, evaluateActions, safeRoute } from '../../core/geo';
+import { describeRoute, distanceM, evaluateActions, safeRoute, segmentIntersectsCircle, weatherAt } from '../../core/geo';
 import { DroneState } from '../../core/models';
 import { OrionStore, summarise } from '../../core/orion-store.service';
-
-/**
- * The simulated drones have no airframe of their own; this is the profile the simulators
- * assume (egress speed, sensors, datalink). Shown as such, so nobody mistakes it for a spec sheet.
- */
-const PLATFORM = {
-  type: 'Multirotor patrol UAS',
-  patrolSpeedMs: 12,
-  egressSpeedMs: 22,
-  enduranceMin: 45,
-  sensors: 'GNSS receiver · INS (IMU) · EO/IR camera',
-  datalink: 'MAVLink 2, signed commands (HMAC-SHA256)',
-};
+import { PLATFORM, describeWeather, isSevereWeather, isWeather, weatherEffects } from '../../core/platform';
 
 const FIX_LABEL: Record<number, string> = { 0: 'No fix', 1: 'No fix', 2: '2D', 3: '3D' };
+
+/** Keep this much more battery than the trip home needs. */
+const RESERVE_FACTOR = 1.3;
 
 interface Signal {
   label: string;
@@ -45,20 +36,57 @@ export class DroneDetails {
   });
 
   /** Remaining flight time if the battery drains linearly over the profile's endurance. */
-  protected enduranceLeftMin = computed(() => Math.round(((this.drone()?.battery_remaining ?? 0) / 100) * PLATFORM.enduranceMin));
+  protected enduranceLeftMin = computed(() => ((this.drone()?.battery_remaining ?? 0) / 100) * PLATFORM.enduranceMin);
 
+  protected weatherHere = computed(() => {
+    const d = this.drone();
+    const wx = d ? weatherAt(this.store.zones(), d.latitude, d.longitude) : undefined;
+    if (!wx) return null;
+    const fx = weatherEffects(wx);
+    return {
+      zone: wx,
+      text: `${wx.name}: ${describeWeather(wx)}`,
+      severe: isSevereWeather(wx),
+      effects: `Link fade ${fx.rssiLoss ? `−${fx.rssiLoss} RSSI, +${fx.dropAdd}% loss` : 'none'} · battery drain ×${fx.batteryMult}`,
+    };
+  });
+
+  /** The way home (direct, or the A* route when RTL is blocked) as [lat, lon] points. */
   protected routeHome = computed(() => {
     const d = this.drone();
     if (!d) return null;
+    const base = ORION_CONFIG.homeBase;
     const rtl = evaluateActions(d, this.store.zones()).find(a => a.id === 'RETURN_TO_HOME')!;
     if (rtl.allowed) {
-      const km = this.baseDistanceKm();
-      return { blocked: false, text: `Direct path is clear · ${km.toFixed(1)} km`, etaMin: (km * 1000) / PLATFORM.egressSpeedMs / 60 };
+      return {
+        blocked: false, why: null, text: `Direct path is clear · ${this.baseDistanceKm().toFixed(1)} km`,
+        lengthM: this.baseDistanceKm() * 1000,
+        points: [[d.latitude, d.longitude], [base.lat, base.lon]] as [number, number][],
+      };
     }
     const route = safeRoute(d, this.store.zones());
     return route
-      ? { blocked: true, text: `A* route: ${describeRoute(route)}`, etaMin: route.lengthM / PLATFORM.egressSpeedMs / 60, why: rtl.reason }
-      : { blocked: true, text: 'No safe route around the active zones: hold position', etaMin: null, why: rtl.reason };
+      ? { blocked: true, why: rtl.reason, text: `A* route: ${describeRoute(route)}`, lengthM: route.lengthM, points: route.waypoints }
+      : { blocked: true, why: rtl.reason, text: 'No safe route around the active zones: hold position', lengthM: null, points: [] };
+  });
+
+  /**
+   * Can it still make it home? Estimate, assuming the worst wind met on the way blows head-on
+   * (so the drone makes 60% of that wind less headway).
+   */
+  protected reserve = computed(() => {
+    const r = this.routeHome();
+    if (!r || r.lengthM === null) return null;
+    const winds = this.store.zones()
+      .filter(z => z.is_active && isWeather(z) && z.center && z.radius_m)
+      .filter(z => r.points.some((p, i) =>
+        i > 0 && segmentIntersectsCircle(r.points[i - 1][0], r.points[i - 1][1], p[0], p[1], z.center![0], z.center![1], z.radius_m!)))
+      .map(z => z.wind_ms ?? 0);
+    const headwind = Math.max(0, ...winds);
+    const speed = Math.max(6, PLATFORM.egressSpeedMs - 0.6 * headwind);
+    const neededMin = r.lengthM / speed / 60;
+    const availableMin = this.enduranceLeftMin();
+    return { neededMin, availableMin, headwind, speed, ok: availableMin >= neededMin * RESERVE_FACTOR };
   });
 
   protected recentEvents = computed(() => {

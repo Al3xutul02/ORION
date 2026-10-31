@@ -15,7 +15,8 @@ export type SimulationAction =
   | 'trigger-corridor-appear'
   | 'trigger-corridor-disappear'
   | 'trigger-danger-appear'
-  | 'trigger-danger-disappear';
+  | 'trigger-danger-disappear'
+  | 'trigger-weather-clear';
 
 /** REST client for the FastAPI backend (Backend/app/api/endpoints). */
 @Injectable({ providedIn: 'root' })
@@ -63,6 +64,10 @@ export class OrionApi {
         notes,
       }),
     );
+  }
+
+  weatherAppear(kind: 'STORM' | 'RAIN' | 'WIND') {
+    return firstValueFrom(this.http.post<{ status: string }>(`${this.base}/simulation/trigger-weather-appear`, {}, { params: { kind } }));
   }
 
   simulation(action: SimulationAction) {

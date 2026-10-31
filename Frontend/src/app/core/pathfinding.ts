@@ -6,6 +6,9 @@
  * drone (or the goal) is already inside can be crossed, at a higher cost, so the planner can
  * get it out. The grid path is then straightened into as few legs as possible.
  *
+ * A hazard can also be "soft" (weather within the platform's limits): never blocked, it just
+ * costs more to cross, so the route skirts it when that's cheap and goes through when it isn't.
+ *
  * Mirrors Backend/app/services/pathfinder.py; keep the two in step.
  */
 
@@ -13,6 +16,7 @@ const M_PER_DEG_LAT = 111139;
 const CELL_M = 75;
 export const MARGIN_M = 120;
 const SOFT_M = 300;
+const SOFT_ZONE_COST = 2; // extra cost per metre inside a soft (weather) zone
 const PAD_M = 1500;
 const MAX_CELLS_PER_SIDE = 260;
 
@@ -21,6 +25,8 @@ export interface Hazard {
   lon: number;
   radiusM: number;
   name: string;
+  /** Avoid when cheap, but never blocked (weather within limits). */
+  soft?: boolean;
 }
 
 export interface PlannedRoute {
@@ -94,9 +100,9 @@ export function planRoute(start: [number, number], goal: [number, number], hazar
   const escape = new Set(
     circles
       .map((c, i) => ({ c, i }))
-      .filter(({ c }) =>
+      .filter(({ c }) => !c.soft && (
         Math.hypot(sx - c.xy[0], sy - c.xy[1]) <= c.radiusM + MARGIN_M ||
-        Math.hypot(gx - c.xy[0], gy - c.xy[1]) <= c.radiusM + MARGIN_M)
+        Math.hypot(gx - c.xy[0], gy - c.xy[1]) <= c.radiusM + MARGIN_M))
       .map(({ i }) => i),
   );
 
@@ -122,6 +128,10 @@ export function planRoute(start: [number, number], goal: [number, number], hazar
     for (let i = 0; i < circles.length; i++) {
       const h = circles[i];
       const edge = Math.hypot(x - h.xy[0], y - h.xy[1]) - h.radiusM;
+      if (h.soft) {
+        if (edge < 0) mult += SOFT_ZONE_COST;
+        continue;
+      }
       if (escape.has(i)) {
         if (edge < 0) mult += 2; // leave the zone we're in as directly as possible
         continue;
@@ -182,8 +192,15 @@ export function planRoute(start: [number, number], goal: [number, number], hazar
     [gx, gy],
   ];
 
+  const inside = (pt: [number, number], h: (typeof circles)[number]) => Math.hypot(pt[0] - h.xy[0], pt[1] - h.xy[1]) <= h.radiusM;
   const clear = (a: [number, number], b: [number, number]) =>
-    circles.every((h, i) => escape.has(i) || segmentPointDistance(a[0], a[1], b[0], b[1], h.xy[0], h.xy[1]) > h.radiusM + MARGIN_M * 0.9);
+    circles.every((h, i) => {
+      if (escape.has(i)) return true;
+      const d = segmentPointDistance(a[0], a[1], b[0], b[1], h.xy[0], h.xy[1]);
+      // Shortcuts may not cut into soft weather the grid route chose to go around.
+      if (h.soft) return inside(a, h) || inside(b, h) || d > h.radiusM;
+      return d > h.radiusM + MARGIN_M * 0.9;
+    });
 
   // String-pulling: from each kept point, jump to the farthest point still in clear line of sight.
   const smoothed: [number, number][] = [points[0]];

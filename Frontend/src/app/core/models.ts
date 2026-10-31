@@ -2,7 +2,8 @@
 // FLEET_UPDATE WebSocket payload (Backend/app/services/simulator.py).
 
 export type TrustStatus = 'GREEN' | 'YELLOW' | 'RED';
-export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT';
+export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'WEATHER';
+export type WeatherKind = 'STORM' | 'RAIN' | 'WIND';
 export type DataMode = 'live' | 'offline';
 export type LinkState = 'connecting' | 'online' | 'offline';
 
@@ -52,6 +53,12 @@ export interface Zone {
   waypoints?: [number, number][]; // [lat, lon][]
   is_active: boolean;
   detected_by: string;
+  // WEATHER zones only (Backend/app/services/weather.py)
+  weather?: WeatherKind;
+  wind_ms?: number;
+  rain?: 'NONE' | 'MODERATE' | 'HEAVY';
+  /** [dlat, dlon] per second. */
+  drift?: [number, number];
 }
 
 export interface FleetUpdate {

@@ -25,9 +25,29 @@
           @if (r.why) {
             <p class="dim">RTL blocked: {{ r.why }}</p>
           }
-          @if (r.etaMin !== null) {
-            <p class="dim mono">ETA ≈ {{ r.etaMin | number: '1.0-1' }} min at {{ platform.egressSpeedMs }} m/s</p>
+        }
+        @if (reserve(); as res) {
+          <p class="mono" [class.bad]="!res.ok" [class.good]="res.ok">
+            Battery reserve {{ res.ok ? 'OK' : 'LOW' }}: needs ≈{{ res.neededMin | number: '1.0-1' }} min, has ≈{{ res.availableMin | number: '1.0-0' }} min
+          </p>
+          <p class="dim mono">
+            ETA at {{ res.speed | number: '1.0-0' }} m/s{{ res.headwind ? ' (headwind ' + (res.headwind | number: '1.0-0') + ' m/s on the way)' : '' }} · estimate, keeps a 30% margin
+          </p>
+        }
+      </section>
+
+      <section>
+        <h3>Weather at drone</h3>
+        @if (weatherHere(); as wx) {
+          <p [class.bad]="wx.severe">{{ wx.text }}</p>
+          <p class="dim">{{ wx.effects }}</p>
+          @if (wx.severe) {
+            <p class="dim">Beyond the {{ platform.maxWindMs }} m/s limit: leave the cell (loiter and patrol are unsafe here).</p>
+          } @else {
+            <p class="dim">Within limits. Link and battery effects are weather, not EW, so trust isn't penalised for them.</p>
           }
+        } @else {
+          <p class="dim">Clear: no weather cell over the drone.</p>
         }
       </section>
 
@@ -81,6 +101,7 @@
           <li>Link lost for 5 s: RTL if the path is clear, otherwise loiter.</li>
           <li>Unsigned, expired or replayed commands are rejected and logged.</li>
           <li>GPS restored after a few seconds in clean airspace.</li>
+          <li>Weather above {{ platform.maxWindMs }} m/s wind is a no-fly zone: alert and a recommendation to leave.</li>
         </ul>
       </section>
 
@@ -90,6 +111,7 @@
           <dt>Type</dt><dd>{{ platform.type }}</dd>
           <dt>Speed</dt><dd class="mono">{{ platform.patrolSpeedMs }} m/s patrol · {{ platform.egressSpeedMs }} m/s egress</dd>
           <dt>Endurance</dt><dd class="mono">≈{{ platform.enduranceMin }} min</dd>
+          <dt>Max wind</dt><dd class="mono">{{ platform.maxWindMs }} m/s</dd>
           <dt>Sensors</dt><dd>{{ platform.sensors }}</dd>
           <dt>Datalink</dt><dd>{{ platform.datalink }}</dd>
         </dl>
