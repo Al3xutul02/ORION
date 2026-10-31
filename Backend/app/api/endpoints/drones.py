@@ -20,27 +20,14 @@ def get_fleet_overview():
     yellow_count = 0
     red_count = 0
 
-    for d_id, d_data in simulator.drones.items():
-        telem = {
-            "drone_id": d_id,
-            "latitude": d_data["lat"],
-            "longitude": d_data["lon"],
-            "altitude": d_data["alt"],
-            "ground_speed": d_data.get("speed", 12.0),
-            "heading": d_data.get("heading", 0.0),
-            "fix_type": 2 if d_data.get("spoofed") else (1 if d_data.get("jammed") else 3),
-            "satellites_visible": 4 if d_data.get("spoofed") else (3 if d_data.get("jammed") else 12),
-            "eph": 4.2 if d_data.get("spoofed") else (6.0 if d_data.get("jammed") else 1.0),
-            "battery_remaining": 95.0,
-            "drop_rate_comm": 35.0 if d_data.get("jammed") else 0.5,
-            "rssi": 25.0 if d_data.get("jammed") else 95.0,
-            "flight_mode": "GUIDED",
-            "is_armed": True
-        }
+    fleet_telemetry = [simulator.get_telemetry(d_id) for d_id in simulator.drones]
+
+    for telem in fleet_telemetry:
+        d_id = telem["drone_id"]
         score = trust_evaluator.evaluate(
             drone_id=d_id,
             telemetry=telem,
-            peer_telemetries=None,
+            peer_telemetries=fleet_telemetry,
             command_valid=True
         )
 
@@ -106,20 +93,14 @@ def get_drone_score_breakdown(drone_id: int):
     if drone_id not in simulator.drones:
         raise HTTPException(status_code=404, detail="Drone not found")
 
-    d_data = simulator.drones[drone_id]
-    telem = {
-        "drone_id": drone_id,
-        "latitude": d_data["lat"],
-        "longitude": d_data["lon"],
-        "altitude": d_data["alt"],
-        "ground_speed": d_data.get("speed", 12.0),
-        "fix_type": 2 if d_data.get("spoofed") else (1 if d_data.get("jammed") else 3),
-        "satellites_visible": 4 if d_data.get("spoofed") else (3 if d_data.get("jammed") else 12),
-        "eph": 4.2 if d_data.get("spoofed") else (6.0 if d_data.get("jammed") else 1.0),
-        "drop_rate_comm": 35.0 if d_data.get("jammed") else 0.5,
-        "rssi": 25.0 if d_data.get("jammed") else 95.0,
-    }
-    return trust_evaluator.evaluate(drone_id=drone_id, telemetry=telem)
+    telem = simulator.get_telemetry(drone_id)
+    fleet_telemetry = [simulator.get_telemetry(d_id) for d_id in simulator.drones]
+    return trust_evaluator.evaluate(
+        drone_id=drone_id,
+        telemetry=telem,
+        peer_telemetries=fleet_telemetry,
+        command_valid=True
+    )
 
 
 @router.post("/telemetry", response_model=TelemetryResponse)

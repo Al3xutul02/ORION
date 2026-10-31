@@ -27,7 +27,7 @@ export class OrionApi {
     return firstValueFrom(this.http.get<{ status: string; simulator_running: boolean; simulation_time_s: number }>(`${ORION_CONFIG.apiBase}/health`));
   }
 
-  events(limit = 500) {
+  events(limit = 2000) {
     return firstValueFrom(this.http.get<AuditEvent[]>(`${this.base}/aar/events`, { params: { limit } }));
   }
 

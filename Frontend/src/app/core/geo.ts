@@ -143,8 +143,10 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
       id: 'CONTINUE_PATROL',
       label: 'Continue patrol',
       allowed: drone.trust_status === 'GREEN',
-      recommended: false,
-      reason: drone.trust_status === 'GREEN' ? 'Drone is trusted' : 'Position not trusted, mission would run in the wrong place',
+      recommended: drone.trust_status === 'GREEN' && !insideHazard && drone.flight_mode !== 'GUIDED',
+      reason: drone.trust_status === 'GREEN'
+        ? (drone.flight_mode !== 'GUIDED' ? 'Drone is recalibrated and trusted; safe to resume regular patrol' : 'Drone is trusted and actively on patrol')
+        : 'Position not trusted, mission would run in the wrong place',
     },
   ];
 
@@ -152,6 +154,10 @@ export function evaluateActions(drone: DroneState, zones: Zone[]): ActionOption[
     return options.map(o => ({ ...o, allowed: false, recommended: false, active: false, reason: 'Drone has landed at base' }));
   }
   const withActive = options.map(o => ({ ...o, active: drone.flight_mode === ACTIVE_MODE[o.id] }));
+  const shouldRecommendPatrol = drone.trust_status === 'GREEN' && !insideHazard && drone.flight_mode !== 'GUIDED';
+  if (shouldRecommendPatrol) {
+    return withActive.map(o => ({ ...o, recommended: o.id === 'CONTINUE_PATROL' }));
+  }
   const handled = withActive.some(o => o.active && o.allowed && o.id !== 'CONTINUE_PATROL');
   return handled ? withActive.map(o => ({ ...o, recommended: false })) : withActive;
 }

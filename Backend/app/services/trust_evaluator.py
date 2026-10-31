@@ -94,8 +94,15 @@ class DroneTrustEvaluator:
                 uncertainty_radius = min(500.0, last_state.get("uncertainty_radius", 0.0) + (excess * 1.2))
                 reasons.append(f"Impossible position jump ({dist_moved:.1f}m in {dt:.1f}s)")
             else:
-                # Decay uncertainty gradually when back to normal
-                uncertainty_radius = max(0.0, last_state.get("uncertainty_radius", 0.0) * 0.85)
+                prev_unc = last_state.get("uncertainty_radius", 0.0)
+                # Uncertainty only decays if GPS fix quality is verified clean (3D fix, good satellites & eph)
+                if gps_score >= 80.0:
+                    uncertainty_radius = max(0.0, prev_unc * 0.85)
+                else:
+                    uncertainty_radius = prev_unc
+                    if uncertainty_radius >= 80.0:
+                        imu_score = 10.0
+                        reasons.append(f"Position inconsistent with inertial reference (±{uncertainty_radius:.0f}m)")
 
         # -------------------------------------------------------------
         # 3. Link Health Score (0..100)
@@ -122,11 +129,11 @@ class DroneTrustEvaluator:
                     continue
                 p_dist = haversine_distance_m(lat, lon, peer.get("latitude", 0), peer.get("longitude", 0))
                 # Nominal patrol distance is 100m to 1000m
-                if p_dist > 1500.0 and imu_score < 70.0:
+                if p_dist > 1200.0 and (imu_score < 70.0 or uncertainty_radius >= 80.0 or gps_score < 50.0):
                     peer_anomalies += 1
 
             if peer_anomalies >= 2:
-                consensus_score = 20.0
+                consensus_score = 15.0
                 reasons.append("Neighbor consensus mismatch (diverged from patrol formation)")
 
         # -------------------------------------------------------------

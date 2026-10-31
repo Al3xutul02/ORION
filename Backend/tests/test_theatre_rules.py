@@ -37,6 +37,22 @@ def test_safe_path_allows_standard_recommendation():
     assert reason is None
 
 
+def test_recalibrated_drone_gets_continue_patrol_recommendation():
+    engine = TheatreRulesEngine()
+    # Drone is in safe airspace holding in LOITER with nominal trust
+    rec = engine.evaluate_tactical_recommendation(
+        drone_id=2,
+        drone_lat=44.3200,
+        drone_lon=23.7950,
+        trust_score=95.0,
+        reason="Sensors nominal",
+        flight_mode="LOITER"
+    )
+    assert rec is not None
+    assert rec["recommended_action"] == "CONTINUE_PATROL"
+    assert rec["trigger_event"] == "SENSORS_RECALIBRATED_SAFE"
+
+
 def test_spawned_danger_zones_do_not_overlap_or_exceed_cap():
     engine = TheatreRulesEngine()
     for _ in range(10):

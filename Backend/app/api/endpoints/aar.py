@@ -9,7 +9,7 @@ router = APIRouter(prefix="/aar", tags=["Inviolable Post-Action Report (AAR)"])
 
 
 @router.get("/events", response_model=List[AuditEventResponse])
-def get_audit_events(limit: int = 200, db: Session = Depends(get_db)):
+def get_audit_events(limit: int = 2000, db: Session = Depends(get_db)):
     """Retrieves chronological entries from the tamper-evident hash-chained AAR log."""
     return aar_service.get_events(db=db, limit=limit)
 

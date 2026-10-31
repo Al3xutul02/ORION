@@ -369,10 +369,7 @@ export class OfflineSimulator {
       return;
     }
 
-    const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
-    const repLat = d.lat + off.lat;
-    const repLon = d.lon + off.lon;
-
+    // Hazards act on the real airframe (d.lat/d.lon), not on the spoofed fix it reports.
     const insideZone = this.zones.some(
       z =>
         z.is_active &&
@@ -380,7 +377,7 @@ export class OfflineSimulator {
         z.geometry_type === 'CIRCLE' &&
         z.center &&
         z.radius_m &&
-        distanceM(repLat, repLon, z.center[0], z.center[1]) <= z.radius_m
+        distanceM(d.lat, d.lon, z.center[0], z.center[1]) <= z.radius_m
     );
     const inJammer = !!this.jammer && distanceM(d.lat, d.lon, this.jammer.lat, this.jammer.lon) <= JAMMER.radiusM;
 
@@ -405,6 +402,29 @@ export class OfflineSimulator {
       this.log('GPS_RESTORED', d.id, {
         description: `Drone ${d.id} recalibrated onboard EKF/IMU in safe airspace (${d.mode}) and restored true 3D GPS position`,
       });
+      if (d.mode === 'LOITER' || d.mode === 'EGRESS') {
+        const resumeRec: Recommendation = {
+          id: this.recs.length + 1,
+          drone_id: d.id,
+          timestamp: new Date().toISOString(),
+          trigger_event: 'SENSORS_RECALIBRATED_SAFE',
+          blocked_action: 'NONE',
+          blocked_reason: 'Sensors and navigation nominal',
+          recommended_action: 'CONTINUE_PATROL',
+          recommendation_details: 'Sensors recalibrated and clean GPS fix verified. Airspace is clear; safe to resume regular sector patrol.',
+          status: 'PENDING',
+          operator_id: null,
+          approved_at: null,
+        };
+        this.recs = [resumeRec, ...this.recs];
+        this.log('RECOMMENDATION_ISSUED', d.id, {
+          recommendation_id: resumeRec.id,
+          blocked_action: resumeRec.blocked_action,
+          blocked_reason: resumeRec.blocked_reason,
+          recommended_action: resumeRec.recommended_action,
+        }, 'ORION_THEATRE_RULES');
+        this.cb.onRecommendations(this.recs);
+      }
     }
   }
 
@@ -434,9 +454,13 @@ export class OfflineSimulator {
     }
 
     if (affected.length < 2) return;
-    const lat = affected.reduce((s, d) => s + d.lat, 0) / affected.length;
-    const lon = affected.reduce((s, d) => s + d.lon, 0) / affected.length;
-    const radius = Math.max(350, ...affected.map(d => distanceM(lat, lon, d.lat, d.lon) + 220));
+    const repPos = (d: SimDrone) => ({
+      lat: d.lat + (d.spoofedAt !== null ? SPOOF_OFFSET.lat : 0),
+      lon: d.lon + (d.spoofedAt !== null ? SPOOF_OFFSET.lon : 0),
+    });
+    const lat = affected.reduce((s, d) => s + repPos(d).lat, 0) / affected.length;
+    const lon = affected.reduce((s, d) => s + repPos(d).lon, 0) / affected.length;
+    const radius = Math.max(350, ...affected.map(d => distanceM(lat, lon, repPos(d).lat, repPos(d).lon) + 220));
     const existing = this.zones.find(z => z.id === DYNAMIC_ZONE_ID);
     if (existing) {
       // Smooth the estimate so the zone glides instead of jumping between ticks.

@@ -11,6 +11,7 @@ from app.services.aar_service import aar_service
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
 from app.models.recommendation import ActionRecommendation
+from app.models.audit import AuditLog
 
 logger = logging.getLogger("orion.simulator")
 
@@ -85,6 +86,72 @@ class OrionFleetSimulator:
         }
         self.next_random_event_at = random.uniform(10.0, 15.0)
 
+    @property
+    def spoofing_active_drone_2(self) -> bool:
+        return any(d.get("spoofed", False) for d in self.drones.values())
+
+    @property
+    def sector_interference_active(self) -> bool:
+        return any(d.get("jammed", False) for d in self.drones.values()) or trust_evaluator.localized_interference_active
+
+    @staticmethod
+    def _reported_position(d: Dict[str, Any]) -> tuple:
+        """
+        Position the drone *reports* (its GPS fix). "lat"/"lon" are always the true airframe
+        position used for physics and hazard exposure; spoofing only shifts the reported fix.
+        """
+        if d.get("spoofed"):
+            off_lat, off_lon = d.get("spoof_offset", (0.0, 0.0))
+            return d["lat"] + off_lat, d["lon"] + off_lon
+        return d["lat"], d["lon"]
+
+    def get_telemetry(self, drone_id: int) -> Dict[str, Any]:
+        """
+        Generates the MAVLink 2 perceived telemetry for a drone.
+        Always reports the perceived GPS fix (_reported_position), never secret ground-truth.
+        """
+        d_data = self.drones[drone_id]
+        mode = d_data["mode"]
+        rep_lat, rep_lon = self._reported_position(d_data)
+        flight_mode = "GUIDED" if mode == "PATROL" else mode
+        speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL") else d_data.get("speed", 12.0))
+
+        fix_type = 3
+        sats = 12
+        eph = round(random.uniform(0.9, 1.2), 2)
+        drop_rate = round(random.uniform(0.2, 0.8), 1)
+        rssi = round(random.uniform(92.0, 98.0), 1)
+
+        if d_data["spoofed"]:
+            sats = 4
+            eph = 4.2
+            fix_type = 2
+
+        if d_data["jammed"]:
+            sats = 3
+            fix_type = 1
+            eph = 6.0
+            drop_rate = 35.0
+            rssi = 25.0
+
+        return {
+            "drone_id": drone_id,
+            "latitude": rep_lat,
+            "longitude": rep_lon,
+            "altitude": 0.0 if mode == "LANDED" else d_data["alt"],
+            "ground_speed": speed,
+            "heading": d_data.get("heading", 0.0),
+            "fix_type": fix_type,
+            "satellites_visible": sats,
+            "eph": eph,
+            "battery_remaining": max(20.0, 100.0 - ((self.elapsed_time * 0.08) % 80.0)),
+            "drop_rate_comm": drop_rate,
+            "rssi": rssi,
+            "noise": 15.0,
+            "flight_mode": flight_mode,
+            "is_armed": mode != "LANDED"
+        }
+
     def subscribe(self, callback: Callable[[Dict[str, Any]], Any]):
         self.listeners.append(callback)
 
@@ -124,26 +191,48 @@ class OrionFleetSimulator:
         trust_evaluator.affected_drones_in_sector.clear()
         trust_evaluator.localized_interference_active = False
         self._init_drones()
+        with SessionLocal() as db:
+            db.query(ActionRecommendation).delete()
+            db.query(AuditLog).delete()
+            db.commit()
+            aar_service.log_event(
+                db=db,
+                event_type="SYSTEM_INITIALIZED",
+                drone_id=None,
+                details={
+                    "system": "ORION Ground Control Station",
+                    "mode": "LIVE_SIMULATION",
+                    "description": "Mission ledger reset and initialized",
+                    "mission_time_s": 0.0,
+                },
+                operator_id="SYSTEM",
+            )
 
     def _issue_recommendation_for_drone(self, db, drone_id: int, reason: str):
-        """Evaluates theatre rules for a degraded drone and creates a pending recommendation if none exists."""
+        """Evaluates theatre rules for a drone and creates a pending recommendation if needed."""
         existing = (
             db.query(ActionRecommendation)
             .filter(ActionRecommendation.drone_id == drone_id, ActionRecommendation.status == "PENDING")
             .first()
         )
         d = self.drones[drone_id]
+        # Theatre rules run on the GCS, so they only know the reported position.
+        rep_lat, rep_lon = self._reported_position(d)
+        is_degraded = d["spoofed"] or d["jammed"]
+        current_trust = 28.0 if is_degraded else 95.0
         rec = theatre_rules.evaluate_tactical_recommendation(
             drone_id=drone_id,
-            drone_lat=d["lat"],
-            drone_lon=d["lon"],
-            trust_score=28.0,
-            reason=reason
+            drone_lat=rep_lat,
+            drone_lon=rep_lon,
+            trust_score=current_trust,
+            reason=reason,
+            flight_mode=d["mode"]
         )
         if not rec:
             return
         if existing:
-            # Update existing pending recommendation if corridor/zone changed
+            # Update existing pending recommendation if corridor/zone/state changed
+            existing.trigger_event = rec["trigger_event"]
             existing.blocked_action = rec["blocked_action"]
             existing.blocked_reason = rec["blocked_reason"]
             existing.recommended_action = rec["recommended_action"]
@@ -177,7 +266,9 @@ class OrionFleetSimulator:
             d["loiter_until"] = float("inf")
             d["egress_waypoints"] = []
         elif action in ("SAFE_CORRIDOR_RETREAT", "LOITER_THEN_SAFE_CORRIDOR_RETREAT"):
-            best_corr, _ = theatre_rules.find_best_corridor(d["lat"], d["lon"])
+            # The GCS plans from what it sees: the reported position.
+            rep_lat, rep_lon = self._reported_position(d)
+            best_corr, _ = theatre_rules.find_best_corridor(rep_lat, rep_lon)
             corridors = theatre_rules.active_corridors()
             chosen = best_corr or (corridors[0] if corridors else None)
             wps = list(reversed(chosen["waypoints"])) if chosen else [[base_lat, base_lon]]
@@ -188,10 +279,6 @@ class OrionFleetSimulator:
             else:
                 d["mode"] = "CORRIDOR"
         elif action == "CONTINUE_PATROL":
-            if d["spoofed"]:
-                off_lat, off_lon = d.get("spoof_offset", (0.0, 0.0))
-                d["lat"] -= off_lat
-                d["lon"] -= off_lon
             d["offset_angle"] = math.atan2(
                 (d["lat"] - self.sector_center["lat"]) / 0.003,
                 (d["lon"] - self.sector_center["lon"]) / 0.004
@@ -215,16 +302,12 @@ class OrionFleetSimulator:
             target_drone_id = random.choice(candidates) if candidates else 2
 
         d = self.drones[target_drone_id]
-        if d["spoofed"]:
-            old_lat, old_lon = d.get("spoof_offset", (0.0, 0.0))
-            d["lat"] -= old_lat
-            d["lon"] -= old_lon
+        # Spoofing only falsifies the GPS fix: the airframe stays where it is ("lat"/"lon"),
+        # while the reported position jumps by spoof_offset (see _reported_position).
         d["spoofed"] = True
         off_lat = random.choice([-1, 1]) * random.uniform(0.0038, 0.0052)
         off_lon = random.choice([-1, 1]) * random.uniform(0.0035, 0.0050)
         d["spoof_offset"] = (off_lat, off_lon)
-        d["lat"] += off_lat
-        d["lon"] += off_lon
         self.milestones_reached["spoofing_triggered"] = True
 
         aar_service.log_event(
@@ -446,6 +529,11 @@ class OrionFleetSimulator:
                 d_data["mode"] = "PATROL"
                 return
             target_lat, target_lon = wps[0]
+            # The autopilot steers by its (possibly spoofed) GPS fix: it drives its *believed*
+            # position onto the waypoint, so the true airframe ends up offset by the spoof.
+            off_lat, off_lon = d_data["spoof_offset"] if d_data["spoofed"] else (0.0, 0.0)
+            target_lat -= off_lat
+            target_lon -= off_lon
             dlat = target_lat - d_data["lat"]
             dlon = target_lon - d_data["lon"]
             dist_deg = math.hypot(dlat, dlon)
@@ -476,18 +564,14 @@ class OrionFleetSimulator:
                 d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
             return
 
-        # Default: PATROL mode
+        # PATROL mode: the drone holds its orbit physically (true frame); spoofing only
+        # shifts what it reports, which is applied in _reported_position().
         angular_speed = 0.08
         patrol_radius_lat = 0.003
         patrol_radius_lon = 0.004
 
         target_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
         target_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
-
-        if d_data["spoofed"]:
-            off_lat, off_lon = d_data.get("spoof_offset", (0.0042, 0.0038))
-            target_lat += off_lat
-            target_lon += off_lon
 
         dlat = target_lat - d_data["lat"]
         dlon = target_lon - d_data["lon"]
@@ -501,15 +585,8 @@ class OrionFleetSimulator:
             d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
         else:
             d_data["offset_angle"] += angular_speed * dt
-            nominal_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
-            nominal_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
-            if d_data["spoofed"]:
-                off_lat, off_lon = d_data.get("spoof_offset", (0.0042, 0.0038))
-                d_data["lat"] = nominal_lat + off_lat
-                d_data["lon"] = nominal_lon + off_lon
-            else:
-                d_data["lat"] = nominal_lat
-                d_data["lon"] = nominal_lon
+            d_data["lat"] = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
+            d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
 
     def _update_drone_recalibration(self, db, d_id: int, d_data: Dict[str, Any], dt: float):
@@ -549,10 +626,8 @@ class OrionFleetSimulator:
         if d_data["safe_airspace_time"] >= recal_threshold:
             was_spoofed = d_data["spoofed"]
             if was_spoofed:
-                # Reject false GPS offset and restore true physical coordinates from INS/EKF
-                off_lat, off_lon = d_data.get("spoof_offset", (0.0, 0.0))
-                d_data["lat"] -= off_lat
-                d_data["lon"] -= off_lon
+                # The EKF rejects the false fix: the reported position snaps back onto the true
+                # airframe position ("lat"/"lon" never moved). Re-plan the corridor from there.
                 if d_data["egress_waypoints"] and d_data["mode"] in ("LOITER", "CORRIDOR"):
                     best_corr, _ = theatre_rules.find_best_corridor(d_data["lat"], d_data["lon"])
                     corridors = theatre_rules.active_corridors()
@@ -591,9 +666,13 @@ class OrionFleetSimulator:
                 .all()
             )
             for rec in pending:
-                rec.status = "EXECUTED"
+                rec.status = "SUPERSEDED"
             if pending:
                 db.commit()
+
+            # Recommend resuming patrol if holding in loiter/corridor/rtl in safe airspace
+            if d_data["mode"] in ("LOITER", "CORRIDOR", "RTL"):
+                self._issue_recommendation_for_drone(db, d_id, "Sensors recalibrated in safe airspace")
 
     async def _run_loop(self):
         interval = 1.0 / self.tick_rate_hz
@@ -620,49 +699,9 @@ class OrionFleetSimulator:
                 for d_id, d_data in self.drones.items():
                     self._move_drone(db, d_id, d_data, dt)
                     self._update_drone_recalibration(db, d_id, d_data, dt)
+                    fleet_telemetry.append(self.get_telemetry(d_id))
 
-                    fix_type = 3
-                    sats = 12
-                    eph = round(random.uniform(0.9, 1.2), 2)
-                    drop_rate = round(random.uniform(0.2, 0.8), 1)
-                    rssi = round(random.uniform(92.0, 98.0), 1)
-
-                    if d_data["spoofed"]:
-                        sats = 4
-                        eph = 4.2
-                        fix_type = 2
-
-                    if d_data["jammed"]:
-                        sats = 3
-                        fix_type = 1
-                        eph = 6.0
-                        drop_rate = 35.0
-                        rssi = 25.0
-
-                    mode = d_data["mode"]
-                    flight_mode = "GUIDED" if mode == "PATROL" else mode
-                    speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL") else d_data["speed"])
-
-                    telem = {
-                        "drone_id": d_id,
-                        "latitude": d_data["lat"],
-                        "longitude": d_data["lon"],
-                        "altitude": 0.0 if mode == "LANDED" else d_data["alt"],
-                        "ground_speed": speed,
-                        "heading": d_data["heading"],
-                        "fix_type": fix_type,
-                        "satellites_visible": sats,
-                        "eph": eph,
-                        "battery_remaining": max(20.0, 100.0 - ((self.elapsed_time * 0.08) % 80.0)),
-                        "drop_rate_comm": drop_rate,
-                        "rssi": rssi,
-                        "noise": 15.0,
-                        "flight_mode": flight_mode,
-                        "is_armed": mode != "LANDED"
-                    }
-                    fleet_telemetry.append(telem)
-
-                # Run trust evaluator across fleet
+                # Run trust evaluator across fleet using perceived telemetry only
                 for telem in fleet_telemetry:
                     d_id = telem["drone_id"]
                     score_breakdown = trust_evaluator.evaluate(
@@ -671,15 +710,6 @@ class OrionFleetSimulator:
                         peer_telemetries=fleet_telemetry,
                         command_valid=True
                     )
-
-                    # Keep spoofed drone in RED while spoofing persists
-                    if self.drones[d_id]["spoofed"]:
-                        score_breakdown.trust_score = min(score_breakdown.trust_score, 32.0)
-                        score_breakdown.trust_status = "RED"
-                        score_breakdown.imu_score = 10.0
-                        score_breakdown.consensus_score = 15.0
-                        score_breakdown.uncertainty_radius_m = max(score_breakdown.uncertainty_radius_m, 180.0)
-                        score_breakdown.reason = "Impossible position jump; Neighbor consensus mismatch (diverged from patrol formation)"
 
                     state_dict = {
                         **telem,

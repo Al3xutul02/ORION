@@ -66,8 +66,9 @@ class AARService:
         )
         return entry
 
-    def get_events(self, db: Session, limit: int = 200) -> List[AuditLog]:
-        return db.query(AuditLog).order_by(AuditLog.id.asc()).limit(limit).all()
+    def get_events(self, db: Session, limit: int = 2000) -> List[AuditLog]:
+        recent = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
+        return list(reversed(recent))
 
     def verify_audit_chain(self, db: Session) -> AARVerificationReport:
         records = db.query(AuditLog).order_by(AuditLog.id.asc()).all()

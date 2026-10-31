@@ -198,18 +198,16 @@ export class OrionStore implements OnDestroy {
   }
 
   private async pollLive(): Promise<void> {
-    try {
-      const [events, recs, status] = await Promise.all([
-        this.api.events(),
-        this.api.recommendations(),
-        this.api.simulationStatus(),
-      ]);
-      this.setEvents(events);
-      this.recommendations.set(recs);
-      this.running.set(status.is_running);
-      if (!status.is_running) this.elapsed.set(status.elapsed_time);
-    } catch {
-      // Socket state drives the link indicator; REST errors just skip this round.
+    const [eventsRes, recsRes, statusRes] = await Promise.allSettled([
+      this.api.events(),
+      this.api.recommendations(),
+      this.api.simulationStatus(),
+    ]);
+    if (eventsRes.status === 'fulfilled') this.setEvents(eventsRes.value);
+    if (recsRes.status === 'fulfilled') this.recommendations.set(recsRes.value);
+    if (statusRes.status === 'fulfilled') {
+      this.running.set(statusRes.value.is_running);
+      if (!statusRes.value.is_running) this.elapsed.set(statusRes.value.elapsed_time);
     }
   }
 

@@ -457,15 +457,37 @@ class TheatreRulesEngine:
         drone_lat: float,
         drone_lon: float,
         trust_score: float,
-        reason: str
+        reason: str,
+        flight_mode: str = "PATROL"
     ) -> Optional[Dict[str, Any]]:
         """
         Determines the safe tactical action when a drone encounters EW or degraded trust:
         - If direct RTL passes through an interference/threat zone: Return-To-Home is BLOCKED.
         - If an open Safe Corridor is clear: recommends LOITER_THEN_SAFE_CORRIDOR_RETREAT.
         - If no Safe Corridor is available/clear: recommends LOITER in place until a corridor opens.
+        - If a diverted/loitering drone has recovered nominal trust in safe airspace: recommends CONTINUE_PATROL.
         """
         if trust_score >= 70.0:
+            if flight_mode in ("LOITER", "CORRIDOR", "RTL"):
+                inside_hazard = False
+                for z in self.active_danger_zones():
+                    if z.get("geometry_type") == "CIRCLE" and z.get("center") and z.get("radius_m"):
+                        if haversine_distance_m(drone_lat, drone_lon, z["center"][0], z["center"][1]) <= z["radius_m"]:
+                            inside_hazard = True
+                            break
+                if not inside_hazard:
+                    return {
+                        "drone_id": drone_id,
+                        "trigger_event": "SENSORS_RECALIBRATED_SAFE",
+                        "blocked_action": "NONE",
+                        "blocked_reason": "Sensors and navigation nominal",
+                        "recommended_action": "CONTINUE_PATROL",
+                        "recommendation_details": (
+                            "Sensors recalibrated and clean GPS fix verified. "
+                            "Airspace is clear of known hazards; safe to resume regular sector patrol."
+                        ),
+                        "safe_waypoints": []
+                    }
             return None
 
         is_safe, block_reason = self.is_path_safe_to_base(drone_lat, drone_lon)

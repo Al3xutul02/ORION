@@ -83,6 +83,12 @@ def test_live_battlefield_events_and_commands(client):
     assert r.json()["status"] == "COMMAND_SENT"
     assert r.json()["signed_command"]["command"] == "LOITER"
 
+    # 9. Verify simulation status endpoint
+    r = client.get("/api/v1/simulation/status")
+    assert r.status_code == 200
+    assert "is_running" in r.json()
+    assert "spoofing_active_drone_2" in r.json()
+
     # Restart simulation so subsequent websocket tests see active broadcasts
     assert client.post("/api/v1/simulation/start").status_code == 200
 
