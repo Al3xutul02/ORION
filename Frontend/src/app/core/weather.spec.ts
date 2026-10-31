@@ -1,4 +1,4 @@
-import { evaluateActions, segmentIntersectsCircle } from './geo';
+import { evaluateActions, segmentIntersectsCircle, weatherPolygon } from './geo';
 import { DroneState, WeatherKind, Zone } from './models';
 import { OfflineSimulator } from './offline-simulator';
 import { planRoute } from './pathfinding';
@@ -76,5 +76,25 @@ describe('weather in the Demo simulator', () => {
     const battery = (id: number) => last.find(d => d.drone_id === id)!.battery_remaining;
     expect(battery(alerted[0])).toBeLessThan(battery(1));
     expect(last.find(d => d.drone_id === alerted[0])!.reason).toContain('weather, not EW');
+  });
+});
+
+describe('weatherPolygon geometry', () => {
+  it('generates closed realistic polygon rings for STORM, RAIN and WIND', () => {
+    for (const kind of ['STORM', 'RAIN', 'WIND'] as const) {
+      const ring = weatherPolygon(44.33, 23.83, 600, kind, 42);
+      expect(ring.length).toBeGreaterThan(60);
+      // Ring must be closed (first vertex == last vertex)
+      const first = ring[0];
+      const last = ring[ring.length - 1];
+      expect(first[0]).toBeCloseTo(last[0], 6);
+      expect(first[1]).toBeCloseTo(last[1], 6);
+      // Vertices must not collapse to center
+      for (const [lon, lat] of ring) {
+        expect(Number.isFinite(lon)).toBeTrue();
+        expect(Number.isFinite(lat)).toBeTrue();
+        expect(Math.hypot(lat - 44.33, lon - 23.83)).toBeGreaterThan(0.001);
+      }
+    }
   });
 });

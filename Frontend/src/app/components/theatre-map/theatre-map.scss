@@ -2,7 +2,7 @@
   position: relative;
   display: block;
   height: 100%;
-  min-height: 320px;
+  min-height: 0;
   border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -16,17 +16,20 @@
 .legend {
   position: absolute;
   left: 10px;
-  bottom: 34px;
+  bottom: 10px;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  max-width: calc(100% - 20px);
+  max-width: calc(100% - 140px);
   padding: 6px 10px;
   border-radius: var(--radius-sm);
-  background: rgba(11, 15, 20, 0.82);
+  background: rgba(11, 15, 20, 0.88);
+  backdrop-filter: blur(6px);
   border: 1px solid var(--line);
   font-size: 11px;
   color: var(--text-dim);
+  pointer-events: auto;
 
   span {
     display: inline-flex;

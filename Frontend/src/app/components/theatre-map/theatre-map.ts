@@ -3,7 +3,7 @@ import {
 } from '@angular/core';
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
-import { circleRing, egressPaths, evaluateActions } from '../../core/geo';
+import { circleRing, egressPaths, evaluateActions, weatherPolygon } from '../../core/geo';
 import { DroneState, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 import { DroneDetails } from '../drone-details/drone-details';
@@ -138,7 +138,7 @@ export class TheatreMap implements OnDestroy {
     });
     this.resizeObserver.observe(this.host().nativeElement);
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
 
     // Overlays are wiped by every setStyle, so they are (re)added on each style load.
     map.on('style.load', () => this.addOverlays());
@@ -157,7 +157,7 @@ export class TheatreMap implements OnDestroy {
     map.addSource('zones', { type: 'geojson', data: empty() });
     map.addLayer({
       id: 'zones-fill', type: 'fill', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
-      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'dynamic'], true], 0.2, 0.12] },
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'is_core'], true], 0.32, ['==', ['get', 'dynamic'], true], 0.2, 0.12] },
     });
     map.addLayer({
       id: 'zones-outline', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'Polygon'],
@@ -211,16 +211,40 @@ export class TheatreMap implements OnDestroy {
 
   private renderZones(zones: Zone[]): void {
     const map = this.map!;
-    const features: Feature[] = zones.filter(z => z.is_active).map(z => {
+    const features: Feature[] = [];
+    for (const z of zones) {
+      if (!z.is_active) continue;
       const props = { id: z.id, name: z.name, color: ZONE_COLORS[z.zone_type] ?? '#888', dynamic: z.detected_by !== 'PRECONFIGURED' };
       if (z.geometry_type === 'CIRCLE' && z.center && z.radius_m) {
-        return { type: 'Feature', properties: props, geometry: { type: 'Polygon', coordinates: [circleRing(z.center[0], z.center[1], z.radius_m)] } };
+        if (z.zone_type === 'WEATHER') {
+          const kind = z.weather ?? 'STORM';
+          const outerRing = weatherPolygon(z.center[0], z.center[1], z.radius_m, kind, z.id);
+          features.push({
+            type: 'Feature',
+            properties: { ...props, is_weather: true, is_core: false },
+            geometry: { type: 'Polygon', coordinates: [outerRing] },
+          });
+          const coreRing = weatherPolygon(z.center[0], z.center[1], z.radius_m * 0.48, kind, z.id);
+          features.push({
+            type: 'Feature',
+            properties: { ...props, is_weather: true, is_core: true, color: '#cfa9ff' },
+            geometry: { type: 'Polygon', coordinates: [coreRing] },
+          });
+        } else {
+          features.push({
+            type: 'Feature',
+            properties: props,
+            geometry: { type: 'Polygon', coordinates: [circleRing(z.center[0], z.center[1], z.radius_m)] },
+          });
+        }
+      } else {
+        features.push({
+          type: 'Feature',
+          properties: props,
+          geometry: { type: 'LineString', coordinates: (z.waypoints ?? []).map(([la, lo]) => [lo, la]) },
+        });
       }
-      return {
-        type: 'Feature', properties: props,
-        geometry: { type: 'LineString', coordinates: (z.waypoints ?? []).map(([la, lo]) => [lo, la]) },
-      };
-    });
+    }
     (map.getSource('zones') as GeoJSONSource).setData({ type: 'FeatureCollection', features });
 
     const seen = new Set<number>();

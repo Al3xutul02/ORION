@@ -14,6 +14,7 @@ export interface Toast {
   level: 'info' | 'warn' | 'critical' | 'ok';
   title: string;
   body: string;
+  count?: number;
 }
 
 export type Trigger =
@@ -503,11 +504,31 @@ export class OrionStore implements OnDestroy {
     try { localStorage.setItem('orion.muted', String(this.muted())); } catch { /* storage unavailable */ }
   }
 
+  private lastBeepAt = 0;
+
+  clearAllToasts(): void {
+    this.toasts.set([]);
+  }
+
   pushToast(level: Toast['level'], title: string, body: string): void {
+    const existing = this.toasts().find(t => t.title === title && t.level === level);
+    if (existing) {
+      const newCount = (existing.count ?? 1) + 1;
+      this.toasts.update(ts => ts.map(t => t.id === existing.id ? { ...t, body, count: newCount } : t));
+      setTimeout(() => this.dismissToast(existing.id), level === 'critical' ? 5500 : 3800);
+      return;
+    }
+
     const id = ++this.toastSeq;
-    this.toasts.update(ts => [...ts, { id, level, title, body }].slice(-4));
-    setTimeout(() => this.dismissToast(id), level === 'critical' ? 9000 : 6000);
-    if (level === 'critical' || level === 'warn') this.beep(level === 'critical' ? 880 : 620);
+    // Cap visible notifications to at most 2 so they never flood or disorient the operator
+    this.toasts.update(ts => [...ts, { id, level, title, body, count: 1 }].slice(-2));
+    setTimeout(() => this.dismissToast(id), level === 'critical' ? 6000 : 4000);
+
+    const now = Date.now();
+    if ((level === 'critical' || level === 'warn') && now - this.lastBeepAt > 800) {
+      this.lastBeepAt = now;
+      this.beep(level === 'critical' ? 880 : 620);
+    }
   }
 
   private async call<T>(fn: () => Promise<T>): Promise<T | null> {

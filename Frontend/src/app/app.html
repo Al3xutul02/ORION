@@ -5,10 +5,21 @@
 </main>
 
 <div class="toasts no-print" aria-live="polite">
+  @if (store.toasts().length > 1) {
+    <div class="toasts-bar">
+      <span class="toasts-count">{{ store.toasts().length }} active alerts</span>
+      <button type="button" class="btn-clear-all" (click)="store.clearAllToasts()">Dismiss all</button>
+    </div>
+  }
   @for (t of store.toasts(); track t.id) {
     <div class="toast {{ t.level }}" role="status">
       <div>
-        <strong>{{ t.title }}</strong>
+        <div class="toast-head">
+          <strong>{{ t.title }}</strong>
+          @if ((t.count ?? 1) > 1) {
+            <span class="count-badge">×{{ t.count }}</span>
+          }
+        </div>
         <p>{{ t.body }}</p>
       </div>
       <button type="button" class="close" aria-label="Dismiss" (click)="store.dismissToast(t.id)">×</button>

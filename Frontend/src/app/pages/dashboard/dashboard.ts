@@ -21,24 +21,27 @@ import { TheatreMap } from '../../components/theatre-map/theatre-map';
     :host {
       display: grid;
       grid-template-columns: minmax(280px, 330px) minmax(0, 1fr) minmax(300px, 360px);
-      grid-template-rows: minmax(0, 1fr) 280px;
+      grid-template-rows: minmax(280px, 1fr) minmax(220px, 260px);
       grid-template-areas:
         'fleet map decisions'
         'bottom bottom decisions';
       gap: 10px;
       padding: 10px;
       height: 100%;
-      min-height: 0;
+      min-height: 540px;
+      box-sizing: border-box;
     }
-    .fleet { grid-area: fleet; }
-    .map { grid-area: map; }
-    .decisions { grid-area: decisions; }
+    .fleet { grid-area: fleet; min-height: 0; }
+    .map { grid-area: map; min-height: 0; }
+    .decisions { grid-area: decisions; min-height: 0; }
     .bottom {
       grid-area: bottom;
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
       gap: 10px;
       min-height: 0;
+      position: relative;
+      z-index: 2;
     }
 
     @media (max-width: 1200px) {

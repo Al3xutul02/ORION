@@ -23,21 +23,43 @@ def get_zones_geojson():
 
         if g_type == "CIRCLE":
             lat, lon = z["center"]
-            features.append({
-                "type": "Feature",
-                "properties": {
-                    "id": z["id"],
-                    "name": name,
-                    "zone_type": z_type,
-                    "radius_m": z["radius_m"],
-                    "is_active": z.get("is_active", True),
-                    "detected_by": z.get("detected_by", "PRECONFIGURED")
-                },
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [lon, lat]  # GeoJSON is [lon, lat]
-                }
-            })
+            if z_type == "WEATHER":
+                from app.services.weather import weather_polygon
+                poly_coords = weather_polygon(lat, lon, z["radius_m"], z.get("weather", "STORM"), z.get("id", 1))
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "id": z["id"],
+                        "name": name,
+                        "zone_type": z_type,
+                        "radius_m": z["radius_m"],
+                        "weather": z.get("weather"),
+                        "wind_ms": z.get("wind_ms"),
+                        "rain": z.get("rain"),
+                        "is_active": z.get("is_active", True),
+                        "detected_by": z.get("detected_by", "PRECONFIGURED")
+                    },
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [poly_coords]
+                    }
+                })
+            else:
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "id": z["id"],
+                        "name": name,
+                        "zone_type": z_type,
+                        "radius_m": z["radius_m"],
+                        "is_active": z.get("is_active", True),
+                        "detected_by": z.get("detected_by", "PRECONFIGURED")
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [lon, lat]  # GeoJSON is [lon, lat]
+                    }
+                })
         elif g_type == "POLYGON":
             coords = [[pt[1], pt[0]] for pt in z.get("waypoints", [])]
             features.append({

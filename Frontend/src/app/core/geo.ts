@@ -27,6 +27,62 @@ export function circleRing(lat: number, lon: number, radiusM: number, steps = 64
   return ring;
 }
 
+/**
+ * Generates an organic, meteorologically realistic polygon contour for weather events.
+ * Rather than a generic geometric circle, this renders realistic atmospheric shapes:
+ * - STORM: Multi-lobed convective thunderstorm anvil / precipitation cluster
+ * - RAIN: Elongated frontal rain band with undulating squall line
+ * - WIND: Aerodynamic streamlined wind stream / jet corridor
+ */
+export function weatherPolygon(
+  lat: number,
+  lon: number,
+  radiusM: number,
+  kind: 'STORM' | 'RAIN' | 'WIND' | string = 'STORM',
+  seed = 1,
+  steps = 72
+): [number, number][] {
+  const ring: [number, number][] = [];
+  const baseDLat = radiusM / M_PER_DEG_LAT;
+  const baseDLon = radiusM / metersPerDegLon(lat);
+
+  // Deterministic pseudo-random phase offset from zone id
+  const phase = ((seed * 137.5) % 360) * (Math.PI / 180);
+
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    if (kind === 'RAIN') {
+      // Elongated front/squall line oriented ~30 degrees, aspect ratio ~2.2 : 1
+      const frontAngle = a - 0.52;
+      const stretchLon = 1.7;
+      const stretchLat = 0.72;
+      const wave = 0.16 * Math.sin(3 * a + phase) + 0.08 * Math.cos(5 * a);
+      const r = 1.0 + wave;
+      const cosA = Math.cos(frontAngle) * stretchLon;
+      const sinA = Math.sin(frontAngle) * stretchLat;
+      ring.push([lon + baseDLon * cosA * r, lat + baseDLat * sinA * r]);
+    } else if (kind === 'WIND') {
+      // Streamlined jet corridor: elongated plume with tapered trailing tail
+      const corridorAngle = a + phase * 0.2;
+      const stretchLon = 1.9;
+      const stretchLat = 0.65;
+      const taper = 1.0 + 0.22 * Math.cos(corridorAngle) + 0.1 * Math.sin(2 * corridorAngle);
+      const cosA = Math.cos(corridorAngle) * stretchLon;
+      const sinA = Math.sin(corridorAngle) * stretchLat;
+      ring.push([lon + baseDLon * cosA * taper, lat + baseDLat * sinA * taper]);
+    } else {
+      // STORM: Convective thunderstorm anvil cluster with organic multi-lobed bulges
+      const lobe1 = 0.24 * Math.sin(3 * a + phase);
+      const lobe2 = 0.14 * Math.cos(5 * a + phase * 1.3);
+      const lobe3 = 0.07 * Math.sin(7 * a);
+      const r = 1.0 + lobe1 + lobe2 + lobe3;
+      ring.push([lon + baseDLon * Math.cos(a) * r, lat + baseDLat * Math.sin(a) * r]);
+    }
+  }
+
+  return ring;
+}
+
 /** Same projected segment/circle test as Backend theatre_rules.line_segment_intersects_circle. */
 export function segmentIntersectsCircle(
   lat1: number, lon1: number, lat2: number, lon2: number,
