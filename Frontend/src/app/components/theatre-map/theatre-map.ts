@@ -63,11 +63,7 @@ export class TheatreMap implements OnDestroy {
   constructor() {
     afterNextRender(() => this.init());
 
-    // The details panel covers the left of the map: shift the theatre right while it's open.
-    effect(() => {
-      const open = this.detailsOpen();
-      if (this.map) this.map.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(open), duration: 500 });
-    });
+
 
     effect(() => {
       const zones = this.store.zones();
@@ -418,7 +414,7 @@ export class TheatreMap implements OnDestroy {
         el.className = 'drone-marker';
         el.addEventListener('click', ev => {
           ev.stopPropagation();
-          this.store.openDetails(d.drone_id);
+          this.store.selectDrone(d.drone_id);
         });
         marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([d.longitude, d.latitude]).addTo(map);
         this.droneMarkers.set(d.drone_id, marker);
