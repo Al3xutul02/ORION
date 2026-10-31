@@ -1,147 +1,211 @@
 <section class="panel">
   <header class="panel-head">
-    <h2>Decisions</h2>
+    <div class="head-title">
+      <h2>Decisions</h2>
+    </div>
+
+    <div class="panel-tabs" role="tablist" aria-label="Decisions View Modes">
+      <button
+        type="button"
+        role="tab"
+        class="tab-btn"
+        [class.active]="activeTab() === 'commands'"
+        [attr.aria-selected]="activeTab() === 'commands'"
+        (click)="setTab('commands')"
+      >
+        <span class="tab-label">Commands</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="tab-btn"
+        [class.active]="activeTab() === 'suggestions'"
+        [attr.aria-selected]="activeTab() === 'suggestions'"
+        (click)="setTab('suggestions')"
+      >
+        <span class="tab-label">Suggestions</span>
+        @if (store.pendingRecommendations().length) {
+          <span class="tab-badge">{{ store.pendingRecommendations().length }}</span>
+        }
+      </button>
+    </div>
+
     <span class="spacer"></span>
-    @if (store.pendingRecommendations().length) {
-      <span class="chip yellow"><span class="dot"></span>{{ store.pendingRecommendations().length }} awaiting operator</span>
+
+    @if (store.pendingRecommendations().length && activeTab() === 'commands') {
+      <button
+        type="button"
+        class="chip yellow clickable"
+        (click)="setTab('suggestions')"
+        title="View suggestions awaiting operator approval"
+      >
+        <span class="dot"></span>{{ store.pendingRecommendations().length }} awaiting
+      </button>
     }
   </header>
 
   <div class="panel-body">
-    @for (rec of store.pendingRecommendations(); track rec.id) {
-      <article class="rec">
-        <div class="rec-head">
-          <strong>Drone {{ rec.drone_id }}</strong>
-          <span class="mono faint">#{{ rec.id }} · {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
+    <!-- TAB 1: COMMANDS (Direct Drone Control) -->
+    @if (activeTab() === 'commands') {
+      <div class="tab-content commands-tab">
+        <div class="section-intro">
+          <span class="sub">Direct Drone Commands</span>
         </div>
 
-        <div class="rationale">
-          <span class="tag reason-tag">Why needed</span>
-          <p>{{ recReason(rec) }}</p>
+        <div class="picker" role="radiogroup" aria-label="Drone to command">
+          @for (d of store.drones(); track d.drone_id) {
+            <button
+              type="button"
+              role="radio"
+              class="pick status-{{ d.trust_status }}"
+              [class.on]="store.selectedDroneId() === d.drone_id"
+              [attr.aria-checked]="store.selectedDroneId() === d.drone_id"
+              (click)="store.selectDrone(d.drone_id)"
+            >
+              <span class="dot"></span>D{{ d.drone_id }}
+              <span class="mono">{{ d.trust_score.toFixed(0) }}</span>
+            </button>
+          }
         </div>
 
-        @if (rec.blocked_action !== 'NONE') {
-          <div class="blocked">
-            <span class="tag">Blocked</span>
-            <div>
-              <strong>{{ pretty(rec.blocked_action) }}</strong>
-              <p>{{ rec.blocked_reason }}</p>
-            </div>
-          </div>
-        }
+        @if (store.selectedDrone(); as d) {
+          <p class="current">
+            Drone {{ d.drone_id }} is flying <strong class="mono">{{ d.flight_mode }}</strong>.
+            @if (canCommand()) {
+              Choose what it should do next:
+            }
+          </p>
 
-        <div class="recommended">
-          <span class="tag">Recommended</span>
-          <div>
-            <strong>{{ pretty(rec.recommended_action) }}</strong>
-            <ol>
-              @for (s of steps(rec); track $index) {
-                <li>{{ s }}</li>
-              }
-            </ol>
-          </div>
-        </div>
+          <ul class="matrix">
+            @for (a of actions(); track a.id) {
+              <li [class.allowed]="a.allowed" [class.recommended]="a.recommended" [class.active]="a.active">
+                <span class="icon" aria-hidden="true">{{ a.allowed ? '✓' : '✕' }}</span>
+                <div class="what">
+                  <strong>{{ a.label }}</strong>
+                  <span>{{ a.reason }}</span>
+                  @if (a.recommended && !a.active) {
+                    <span class="chip accent">Recommended</span>
+                  }
+                </div>
 
-        <div class="rec-actions">
-          <button class="btn approve" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'APPROVE')">
-            Approve &amp; send signed
-          </button>
-          <button class="btn danger" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'REJECT')">Reject</button>
-        </div>
-        <p class="note">Or pick a different safe action for this drone below.</p>
-      </article>
-    }
+                <div class="do">
+                  @if (a.active && a.allowed) {
+                    <span class="chip green">Active</span>
+                  } @else if (a.active) {
+                    <span class="chip red" title="The drone is doing this now, but it is not safe">Active · unsafe</span>
+                  } @else if (!a.allowed) {
+                    <span class="chip red">Blocked</span>
+                  } @else if (confirming() === a.id) {
+                    <button class="btn sm approve" type="button" (click)="send(a)">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="confirming.set(null)">Cancel</button>
+                  } @else {
+                    <button
+                      class="btn sm"
+                      type="button"
+                      [disabled]="!canCommand()"
+                      [title]="canCommand() ? 'Send a signed command' : 'Connect to the live backend or switch to Demo mode'"
+                      (click)="confirming.set(a.id)"
+                    >
+                      Send
+                    </button>
+                  }
+                </div>
+              </li>
+            }
+          </ul>
 
-    <h3 class="sub">Command a drone</h3>
-
-    <div class="picker" role="radiogroup" aria-label="Drone to command">
-      @for (d of store.drones(); track d.drone_id) {
-        <button
-          type="button"
-          role="radio"
-          class="pick status-{{ d.trust_status }}"
-          [class.on]="store.selectedDroneId() === d.drone_id"
-          [attr.aria-checked]="store.selectedDroneId() === d.drone_id"
-          (click)="store.selectDrone(d.drone_id)"
-        >
-          <span class="dot"></span>D{{ d.drone_id }}
-          <span class="mono">{{ d.trust_score.toFixed(0) }}</span>
-        </button>
-      }
-    </div>
-
-    @if (store.selectedDrone(); as d) {
-      <p class="current">
-        Drone {{ d.drone_id }} is flying <strong class="mono">{{ d.flight_mode }}</strong>.
-        @if (canCommand()) {
-          Choose what it should do next:
-        }
-      </p>
-
-      <ul class="matrix">
-        @for (a of actions(); track a.id) {
-          <li [class.allowed]="a.allowed" [class.recommended]="a.recommended" [class.active]="a.active">
-            <span class="icon" aria-hidden="true">{{ a.allowed ? '✓' : '✕' }}</span>
-            <div class="what">
-              <strong>{{ a.label }}</strong>
-              <span>{{ a.reason }}</span>
-              @if (a.recommended && !a.active) {
-                <span class="chip accent">Recommended</span>
-              }
-            </div>
-
-            <div class="do">
-              @if (a.active && a.allowed) {
-                <span class="chip green">Active</span>
-              } @else if (a.active) {
-                <span class="chip red" title="The drone is doing this now, but it is not safe">Active · unsafe</span>
-              } @else if (!a.allowed) {
-                <span class="chip red">Blocked</span>
-              } @else if (confirming() === a.id) {
-                <button class="btn sm approve" type="button" (click)="send(a)">Confirm</button>
-                <button class="btn sm ghost" type="button" (click)="confirming.set(null)">Cancel</button>
-              } @else {
-                <button
-                  class="btn sm"
-                  type="button"
-                  [disabled]="!canCommand()"
-                  [title]="canCommand() ? 'Send a signed command' : 'Connect to the live backend or switch to Demo mode'"
-                  (click)="confirming.set(a.id)"
-                >
-                  Send
-                </button>
-              }
-            </div>
-          </li>
-        }
-      </ul>
-
-      @if (!canCommand()) {
-        <p class="note">Backend offline: connect to the live backend or switch to Demo mode to send direct commands.</p>
-      } @else {
-        <p class="note">Each command is signed and written to the after-action log. Blocked actions can't be sent.</p>
-      }
-    } @else {
-      <p class="empty">
-        @if (store.drones().length) {
-          Pick a drone above, on the map, or in the fleet list.
+          @if (!canCommand()) {
+            <p class="note">Backend offline: connect to the live backend or switch to Demo mode to send direct commands.</p>
+          } @else {
+            <p class="note">Each command is signed and written to the after-action log. Blocked actions can't be sent.</p>
+          }
         } @else {
-          No drones yet. Press Start.
+          <p class="empty">
+            @if (store.drones().length) {
+              Pick a drone above, on the map, or in the fleet list.
+            } @else {
+              No drones yet. Press Start.
+            }
+          </p>
         }
-      </p>
+      </div>
     }
 
-    @if (history().length) {
-      <h3 class="sub">Decision log</h3>
-      <ul class="history">
-        @for (r of history(); track r.id) {
-          <li>
-            <span class="chip" [class.green]="r.status === 'APPROVED' || r.status === 'EXECUTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
-            <span>D{{ r.drone_id }} · {{ pretty(r.recommended_action) }}</span>
-            <span class="mono faint">{{ r.operator_id }} {{ r.approved_at | date: 'HH:mm:ss' }}</span>
-          </li>
+    <!-- TAB 2: SUGGESTIONS (Recommended Courses of Action) -->
+    @if (activeTab() === 'suggestions') {
+      <div class="tab-content suggestions-tab">
+        @if (store.pendingRecommendations().length) {
+          @for (rec of store.pendingRecommendations(); track rec.id) {
+            <article class="rec">
+              <div class="rec-head">
+                <div class="head-left">
+                  <strong>Drone {{ rec.drone_id }}</strong>
+                  <span class="chip-event">{{ pretty(rec.trigger_event) }}</span>
+                </div>
+                <span class="mono faint">#{{ rec.id }} · {{ rec.timestamp | date: 'HH:mm:ss' }}</span>
+              </div>
+
+              <div class="rationale">
+                <span class="tag reason-tag">Why needed</span>
+                <p>{{ recReason(rec) }}</p>
+              </div>
+
+              @if (rec.blocked_action !== 'NONE') {
+                <div class="blocked">
+                  <span class="tag">Blocked</span>
+                  <div>
+                    <strong>{{ pretty(rec.blocked_action) }}</strong>
+                    <p>{{ rec.blocked_reason }}</p>
+                  </div>
+                </div>
+              }
+
+              <div class="recommended">
+                <span class="tag">Recommended</span>
+                <div>
+                  <strong>{{ pretty(rec.recommended_action) }}</strong>
+                  <ol>
+                    @for (s of steps(rec); track $index) {
+                      <li>{{ s }}</li>
+                    }
+                  </ol>
+                </div>
+              </div>
+
+              <div class="rec-actions">
+                <button class="btn approve" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'APPROVE')">
+                  Approve &amp; send signed
+                </button>
+                <button class="btn danger" type="button" [disabled]="store.busy()" (click)="store.decide(rec, 'REJECT')">Reject</button>
+              </div>
+              <p class="note">Or switch to the Commands tab to send an alternate direct order.</p>
+            </article>
+          }
+        } @else {
+          <div class="empty-suggestions">
+            <span class="check-icon">✓</span>
+            <strong>No Pending Suggestions</strong>
+            <p>All active drones are operating within nominal flight envelopes or executing approved directives.</p>
+            <button class="btn sm" type="button" (click)="setTab('commands')">
+              Open Commands
+            </button>
+          </div>
         }
-      </ul>
+
+        @if (history().length) {
+          <h3 class="sub">Decision History</h3>
+          <ul class="history">
+            @for (r of history(); track r.id) {
+              <li>
+                <span class="chip" [class.green]="r.status === 'APPROVED' || r.status === 'EXECUTED'" [class.red]="r.status === 'REJECTED'">{{ r.status }}</span>
+                <span>D{{ r.drone_id }} · {{ pretty(r.recommended_action) }}</span>
+                <span class="mono faint">{{ r.operator_id }} {{ r.approved_at | date: 'HH:mm:ss' }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </div>
     }
   </div>
 </section>

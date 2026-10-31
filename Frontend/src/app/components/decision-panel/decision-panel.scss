@@ -282,3 +282,112 @@
     transform: translateY(-6px);
   }
 }
+
+.panel-tabs {
+  display: inline-flex;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+  margin-left: 4px;
+
+  .tab-btn {
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+
+    &:hover {
+      color: var(--text);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    &.active {
+      background: var(--accent);
+      color: #0b0f14;
+      font-weight: 700;
+
+      .tab-badge {
+        background: #0b0f14;
+        color: var(--yellow);
+      }
+    }
+  }
+
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--yellow);
+    color: #0b0f14;
+    font-size: 9.5px;
+    font-weight: 700;
+    font-family: var(--mono);
+  }
+}
+
+.chip.clickable {
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--yellow) 50%, transparent);
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--yellow) 22%, transparent);
+    transform: translateY(-1px);
+  }
+}
+
+.empty-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--panel-2) 40%, transparent);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+
+  .check-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--green-bg);
+    color: var(--green);
+    font-size: 16px;
+    margin-bottom: 8px;
+  }
+
+  strong {
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+
+  p {
+    color: var(--text-dim);
+    font-size: 11.5px;
+    max-width: 260px;
+    margin: 0 0 14px;
+    line-height: 1.45;
+  }
+}
