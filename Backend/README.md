@@ -122,6 +122,32 @@ Aplicația implementează nativ parserul `pymavlink` pentru pachetele cerute:
 | `RADIO_STATUS` | `rssi`, `noise` | Raport semnal/zgomot legătură de comandă |
 | `COMMAND_LONG` | `command`, `params`, `signature` | Comenzi semnate criptografic (RTL, Loiter) |
 
+### Integrare QGroundControl / SITL (`services/mavlink_bridge.py`)
+
+**ORION → QGroundControl.** Fiecare dronă simulată e publicată ca vehicul MAVLink 2 real pe UDP
+`127.0.0.1:14550` (portul pe care QGroundControl ascultă implicit): sysid = 100 + id dronă
+(D1 → 101 … D4 → 104), HEARTBEAT (ArduCopter), GLOBAL_POSITION_INT, GPS_RAW_INT, SYS_STATUS,
+RADIO_STATUS la 2 Hz. Deschide QGroundControl și dronele apar singure. Se trimite poziția
+*raportată*, deci o dronă spoofată apare în QGC la poziția falsă, iar ORION o marchează ca suspectă.
+
+**SITL / drone reale → ORION.** ORION ascultă pe UDP `0.0.0.0:14560`. Orice vehicul MAVLink
+trimis acolo intră în flotă ca dronă 200 + sysid, cu sursa `MAVLINK`, și trece prin același scor de
+încredere. Exemple:
+
+```bash
+# ArduPilot SITL
+sim_vehicle.py -v ArduCopter --out=udp:127.0.0.1:14560
+# QGroundControl: Application Settings → MAVLink → MAVLink forwarding → host 127.0.0.1:14560
+```
+
+Vehiculele externe sunt **doar citire**: ORION nu le trimite comenzi (comandă rămâne în GCS-ul lor).
+Dronele proprii (sysid 101–199) și stațiile de sol (`MAV_TYPE_GCS`) sunt ignorate la intrare, ca
+forwarding-ul să nu facă buclă. Un vehicul tăcut 5 s dispare din flotă.
+
+Stare: `GET /api/v1/mavlink/status`. Configurare (`.env`): `MAVLINK_OUT_ENABLED`, `MAVLINK_OUT_HOST`,
+`MAVLINK_OUT_PORT`, `MAVLINK_IN_ENABLED`, `MAVLINK_IN_HOST`, `MAVLINK_IN_PORT`. În Docker,
+`debug.ps1` și `docker-compose.yml` publică UDP 14560 și trimit către `host.docker.internal:14550`.
+
 ---
 
 ## 🎬 Scenariul Demo de 3 Minute (Scriptat)

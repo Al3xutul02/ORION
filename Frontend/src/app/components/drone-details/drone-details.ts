@@ -5,6 +5,7 @@ import { describeRoute, distanceM, evaluateActions, safeRoute, segmentIntersects
 import { DroneState } from '../../core/models';
 import { OrionStore, summarise } from '../../core/orion-store.service';
 import { PLATFORM, describeWeather, isSevereWeather, isWeather, weatherEffects } from '../../core/platform';
+import { MESH_RANGE_M } from '../../core/mesh';
 
 const FIX_LABEL: Record<number, string> = { 0: 'No fix', 1: 'No fix', 2: '2D', 3: '3D' };
 
@@ -27,6 +28,7 @@ interface Signal {
 export class DroneDetails {
   protected store = inject(OrionStore);
   protected platform = PLATFORM;
+  protected meshRangeKm = MESH_RANGE_M / 1000;
   protected drone = this.store.detailsDrone;
 
   protected baseDistanceKm = computed(() => {
@@ -101,7 +103,12 @@ export class DroneDetails {
       { label: 'GPS', value: s.gps_score, how: 'Drops with a 2D or no fix, under 9 satellites, or EPH above 2–3 m.' },
       { label: 'INS', value: s.imu_score, how: 'Drops when the drone "moves" faster than physically possible (above ~25 m/s): a false position.' },
       { label: 'Link', value: s.link_score, how: 'Drops above 20% packet loss or with RSSI under 40.' },
-      { label: 'Peers', value: s.consensus_score, how: 'Ground station compares the fleet: drops when this drone diverges from its neighbours after a suspicious jump.' },
+      {
+        label: 'Peers', value: s.consensus_score,
+        how: d.mesh?.score != null
+          ? 'Drone-to-drone mesh: neighbours measure their distance to it by radio and check it against the GPS positions.'
+          : 'No drone in mesh range: the ground station compares it with the rest of the fleet instead.',
+      },
     ];
   }
 
@@ -118,4 +125,13 @@ export class DroneDetails {
   }
 
   protected summary = summarise;
+
+  protected meshStatus(status: string): string {
+    return ({
+      TRUSTED: 'Agrees with the mesh majority',
+      OUTLIER: 'Outvoted: its GPS contradicts the radio ranges',
+      DISPUTED: 'Disputed: neighbours disagree, no majority',
+      ALONE: 'No drone in mesh range',
+    } as Record<string, string>)[status] ?? status;
+  }
 }

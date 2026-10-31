@@ -69,6 +69,16 @@ class Settings(BaseSettings):
     SIMULATION_TICK_RATE_HZ: float = 2.0
     SIMULATION_DEMO_ENABLED: bool = True
 
+    # MAVLink bridge (services/mavlink_bridge.py). Output: simulated drones published as MAVLink
+    # vehicles, by default to QGroundControl on this machine. Input: external vehicles (SITL,
+    # real drones, QGroundControl forwarding) heard on UDP and added to the fleet, read-only.
+    MAVLINK_OUT_ENABLED: bool = True
+    MAVLINK_OUT_HOST: str = "127.0.0.1"
+    MAVLINK_OUT_PORT: int = 14550
+    MAVLINK_IN_ENABLED: bool = True
+    MAVLINK_IN_HOST: str = "0.0.0.0"
+    MAVLINK_IN_PORT: int = 14560
+
     # Read-only AAR copilot (Claude API). Without a key here, the SDK falls back to the
     # ANTHROPIC_API_KEY environment variable or an `ant auth login` profile.
     ANTHROPIC_API_KEY: Optional[str] = None

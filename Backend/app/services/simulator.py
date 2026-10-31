@@ -8,7 +8,8 @@ from typing import Dict, Any, List, Optional, Callable
 from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
 from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
-from app.services import weather
+from app.services import mesh, patrol, weather
+from app.services.mavlink_bridge import mavlink_input, mavlink_output
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
 from app.models.recommendation import ActionRecommendation
@@ -17,6 +18,9 @@ from app.models.audit import AuditLog
 logger = logging.getLogger("orion.simulator")
 
 EGRESS_SPEED_DEG_PER_SEC = 0.00022  # ~24 m/s in lat/lon degrees
+PATROL_ANGULAR_SPEED = 0.08  # rad/s around the orbit; patrol.py only ever slows a drone below it
+PATROL_RADIUS_LAT = 0.003    # orbit half-axes in degrees (~330 m x ~320 m)
+PATROL_RADIUS_LON = 0.004
 
 
 class OrionFleetSimulator:
@@ -80,6 +84,13 @@ class OrionFleetSimulator:
                 "egress_waypoints": [], "landed_until": 0.0, "safe_airspace_time": 0.0
             },
         }
+        for d in self.drones.values():
+            # Start exactly on the orbit at their slot (D1 east, D2 north, D3 west, D4 south),
+            # evenly spread, instead of crossing the sector to reach it.
+            d["lat"] = self.sector_center["lat"] + 0.003 * math.sin(d["offset_angle"])
+            d["lon"] = self.sector_center["lon"] + 0.004 * math.cos(d["offset_angle"])
+            d["on_orbit"] = True
+        self._patrol_members = frozenset(self.drones)  # the starting formation
         self.milestones_reached = {
             "spoofing_triggered": False,
             "rtl_blocked_recommended": False,
@@ -118,6 +129,8 @@ class OrionFleetSimulator:
         rep_lat, rep_lon = self._reported_position(d_data)
         flight_mode = "GUIDED" if mode == "PATROL" else mode
         speed = 0.0 if mode in ("LOITER", "LANDED") else (22.0 if mode in ("CORRIDOR", "RTL", "ROUTE") else d_data.get("speed", 12.0))
+        if mode == "LOITER" and d_data.get("repositioning"):
+            speed = 12.0  # stepping off the patrol orbit before it holds
 
         fix_type = 3
         sats = 12
@@ -613,9 +626,15 @@ class OrionFleetSimulator:
                 d_data["spoof_offset"] = (0.0, 0.0)
             return
 
+        if mode != "LOITER":
+            d_data.pop("hold_point", None)
+            d_data["repositioning"] = False
+
         if mode == "LOITER":
             if d_data["egress_waypoints"] and self.elapsed_time >= d_data["loiter_until"]:
                 d_data["mode"] = "CORRIDOR"
+                return
+            self._hold_off_orbit(d_data, dt)
             return
 
         if mode == "ROUTE" and d_data["egress_waypoints"] and self._route_leg_blocked(d_data):
@@ -683,9 +702,10 @@ class OrionFleetSimulator:
 
         # PATROL mode: the drone holds its orbit physically (true frame); spoofing only
         # shifts what it reports, which is applied in _reported_position().
-        angular_speed = 0.08
-        patrol_radius_lat = 0.003
-        patrol_radius_lon = 0.004
+        d_data["alt"] = self.sector_center["alt"]
+        angular_speed = PATROL_ANGULAR_SPEED
+        patrol_radius_lat = PATROL_RADIUS_LAT
+        patrol_radius_lon = PATROL_RADIUS_LON
 
         target_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
         target_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
@@ -697,14 +717,86 @@ class OrionFleetSimulator:
 
         if dist_deg > step * 1.5:
             # Smoothly fly back to the patrol orbit entry point instead of teleporting
+            d_data["on_orbit"] = False
             d_data["lat"] += (dlat / dist_deg) * step
             d_data["lon"] += (dlon / dist_deg) * step
             d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
         else:
-            d_data["offset_angle"] += angular_speed * dt
+            d_data["on_orbit"] = True
+            d_data["offset_angle"] += d_data.get("patrol_rate", angular_speed) * dt
             d_data["lat"] = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
             d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
+
+    def _hold_off_orbit(self, d_data: Dict[str, Any], dt: float):
+        """A loitering drone steps out of the patrol orbit's path (patrol.hold_point), at patrol speed."""
+        center = (self.sector_center["lat"], self.sector_center["lon"])
+        radii = (PATROL_RADIUS_LAT, PATROL_RADIUS_LON)
+        if "hold_point" not in d_data:  # decided once, when the drone starts holding
+            d_data["hold_point"] = patrol.hold_point(d_data["lat"], d_data["lon"], center, radii, self._hold_is_clear(d_data))
+            if d_data["hold_point"] is None and patrol.on_orbit(d_data["lat"], d_data["lon"], center, radii):
+                d_data["alt"] = self.sector_center["alt"] + patrol.HOLD_CLIMB_M
+        target = d_data["hold_point"]
+        if target is None:
+            d_data["repositioning"] = False
+            return
+        dlat, dlon = target[0] - d_data["lat"], target[1] - d_data["lon"]
+        dist_deg = math.hypot(dlat, dlon)
+        step = EGRESS_SPEED_DEG_PER_SEC / 2 * dt  # patrol speed: no reason to rush
+        if dist_deg <= step:
+            d_data["lat"], d_data["lon"] = target
+            d_data["repositioning"] = False
+        else:
+            d_data["lat"] += dlat / dist_deg * step
+            d_data["lon"] += dlon / dist_deg * step
+            d_data["heading"] = (math.degrees(math.atan2(dlon, dlat)) + 360) % 360
+            d_data["repositioning"] = True
+
+    def _hold_is_clear(self, d_data: Dict[str, Any]):
+        """A hold point is clear if it is outside every hazard and the way there crosses none
+        (hazards the drone is already inside don't count, it is leaving them anyway)."""
+        lat, lon = d_data["lat"], d_data["lon"]
+        zones = [
+            z for z in theatre_rules.blocking_zones()
+            if z.get("geometry_type") == "CIRCLE"
+            and haversine_distance_m(lat, lon, *z["center"]) > z["radius_m"]
+        ]
+
+        def clear(t_lat: float, t_lon: float) -> bool:
+            return not any(
+                line_segment_intersects_circle(lat, lon, t_lat, t_lon, *z["center"], z["radius_m"]) for z in zones
+            )
+        return clear
+
+    def _coordinate_patrol(self, db):
+        """Keeps the drones on the orbit evenly spaced; logs when one joins or leaves it."""
+        on_orbit = {i: d["offset_angle"] for i, d in self.drones.items() if d["mode"] == "PATROL" and d.get("on_orbit")}
+        for i, rate in patrol.spacing_rates(on_orbit, PATROL_ANGULAR_SPEED).items():
+            self.drones[i]["patrol_rate"] = rate
+        members = frozenset(on_orbit)
+        previous, self._patrol_members = self._patrol_members, members
+        if members == previous:
+            return
+        joined, left = sorted(members - previous), sorted(previous - members)
+        n = len(members)
+        single = len(joined) + len(left) == 1  # then the log row already names the drone
+        change = ("Joined the patrol orbit" if joined else "Left the patrol orbit") if single else ", ".join(
+            [f"Drone {i} joined" for i in joined] + [f"Drone {i} left" for i in left]
+        )
+        aar_service.log_event(
+            db=db,
+            event_type="PATROL_REBALANCED",
+            drone_id=(joined or left)[0] if single else None,
+            details={
+                "description": f"{change}: {n} drone(s) on patrol"
+                + (f", re-spacing to {360 / n:.0f} deg apart" if n >= 2 else ""),
+                "joined": joined,
+                "left": left,
+                "patrol_drones": sorted(members),
+                "mission_time_s": self.elapsed_time,
+            },
+            operator_id="ORION_PATROL",
+        )
 
     def _route_leg_blocked(self, d_data: Dict[str, Any]) -> bool:
         """True when the leg the drone is flying now crosses a hazard it isn't already inside."""
@@ -879,6 +971,7 @@ class OrionFleetSimulator:
                         operator_id="MET_SERVICE"
                     )
 
+                self._coordinate_patrol(db)
                 for d_id, d_data in self.drones.items():
                     self._move_drone(db, d_id, d_data, dt)
                     self._update_drone_recalibration(db, d_id, d_data, dt)
@@ -888,19 +981,39 @@ class OrionFleetSimulator:
                     wx_fx = weather.effects(wx)
                     if d_data["mode"] != "LANDED":
                         d_data["battery_used"] = (d_data.get("battery_used", 0.0) + 0.08 * dt * wx_fx["battery_mult"]) % 80.0
-                    fleet_telemetry.append(self.get_telemetry(d_id))
+                    fleet_telemetry.append({**self.get_telemetry(d_id), "source": "SIM"})
+
+                # External MAVLink vehicles (SITL, real drones) join the fleet read-only.
+                fleet_telemetry.extend(mavlink_input.snapshot())
+
+                # Drone-to-drone mesh: neighbours range each other by radio and vote on whose GPS is lying.
+                mesh_view = mesh.compute_mesh(
+                    [
+                        mesh.MeshNode(
+                            drone_id=d_id,
+                            true_pos=(d["lat"], d["lon"]),
+                            reported_pos=self._reported_position(d),
+                            online=d["mode"] != "LANDED",
+                        )
+                        for d_id, d in self.drones.items()
+                    ],
+                    haversine_distance_m,
+                )
 
                 # Run trust evaluator across fleet using perceived telemetry only
                 for telem in fleet_telemetry:
                     d_id = telem["drone_id"]
+                    peer_view = mesh_view.get(d_id)
                     score_breakdown = trust_evaluator.evaluate(
                         drone_id=d_id,
                         telemetry=telem,
                         peer_telemetries=fleet_telemetry,
-                        command_valid=True
+                        command_valid=True,
+                        mesh_score=peer_view["score"] if peer_view else None,
+                        mesh_reason=mesh.describe(peer_view),
                     )
 
-                    wx = self.drones[d_id].get("weather_now")
+                    wx = self.drones.get(d_id, {}).get("weather_now")
                     if wx:
                         note = f"Weather: {wx['name']} ({weather.describe(wx)}), link/battery effects are weather, not EW"
                         nominal = score_breakdown.reason == "Sensors & consensus nominal"
@@ -912,9 +1025,13 @@ class OrionFleetSimulator:
                         "uncertainty_radius_m": score_breakdown.uncertainty_radius_m,
                         "reason": score_breakdown.reason,
                         "scores": score_breakdown.model_dump(mode="json"),
+                        "mesh": peer_view,
                         "last_updated": datetime.now(timezone.utc).isoformat()
                     }
                     drone_states.append(state_dict)
+
+                # Publish the simulated drones as MAVLink vehicles (QGroundControl sees what they report).
+                mavlink_output.publish([s for s in drone_states if s.get("source") == "SIM"])
 
                 # Broadcast only active zones to frontend map
                 ws_payload = {

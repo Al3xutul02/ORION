@@ -4,7 +4,11 @@
       <div class="score mono">{{ d.trust_score | number: '1.0-0' }}</div>
       <div class="ident">
         <strong>Drone {{ d.drone_id }}</strong>
-        <span class="mono">ORION-{{ d.drone_id }} · {{ d.flight_mode }}</span>
+        @if (d.source === 'MAVLINK') {
+          <span class="mono">MAVLink sysid {{ d.mavlink_sysid }} · {{ d.mavlink_address }} · {{ d.flight_mode }} · read-only</span>
+        } @else {
+          <span class="mono">ORION-{{ d.drone_id }} · {{ d.flight_mode }}</span>
+        }
       </div>
       <button type="button" class="close" aria-label="Close details" (click)="store.closeDetails()">×</button>
     </header>
@@ -64,6 +68,24 @@
           </div>
         }
         <p class="dim">Score = 30% GPS + 30% INS + 20% link + 20% peers, capped at 35 after an impossible jump or ≥100 m uncertainty. Green ≥ 75, yellow ≥ 40.</p>
+      </section>
+
+      <section>
+        <h3>Mesh (drone-to-drone)</h3>
+        @if (d.mesh; as m) {
+          <p [class.bad]="m.status === 'OUTLIER'" [class.good]="m.status === 'TRUSTED'">{{ meshStatus(m.status) }}</p>
+          @for (l of m.links; track l.peer_id) {
+            <div class="mesh-row" [class.off]="!l.consistent">
+              <span class="mono">D{{ l.peer_id }}</span>
+              <span class="mono">GPS {{ l.gps_distance_m | number: '1.0-0' }} m</span>
+              <span class="mono">radio {{ l.radio_range_m | number: '1.0-0' }} m</span>
+              <span>{{ l.consistent ? '✓' : '✕' }}</span>
+            </div>
+          }
+          <p class="dim">Each neighbour measures its range to this drone by radio time-of-flight, which a GPS spoofer can't fake, and compares it with the GPS positions. Range {{ meshRangeKm }} km.</p>
+        } @else {
+          <p class="dim">No mesh data (drone offline or landed).</p>
+        }
       </section>
 
       <section>

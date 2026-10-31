@@ -65,6 +65,10 @@
   &.route {
     border-top-color: var(--accent);
   }
+
+  &.mesh {
+    border-top: 1px solid var(--green);
+  }
 }
 
 .overlay-tr {

@@ -194,6 +194,18 @@ export class TheatreMap implements OnDestroy {
       },
     });
 
+    // Drone-to-drone mesh links: green where GPS agrees with the radio range, red where it doesn't.
+    map.addSource('mesh', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'mesh', type: 'line', source: 'mesh',
+      paint: {
+        'line-color': ['case', ['get', 'consistent'], '#3ddc84', '#ff5463'],
+        'line-width': ['case', ['get', 'consistent'], 1, 1.8],
+        'line-opacity': ['case', ['get', 'consistent'], 0.35, 0.85],
+        'line-dasharray': ['case', ['get', 'consistent'], ['literal', [1, 0]], ['literal', [2, 1.5]]],
+      },
+    });
+
     map.addSource('trails', { type: 'geojson', data: empty() });
     map.addLayer({
       id: 'trails', type: 'line', source: 'trails',
@@ -203,6 +215,24 @@ export class TheatreMap implements OnDestroy {
     this.ready = true;
     this.renderZones(this.store.zones());
     this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
+  }
+
+  /** One line per pair of drones that hear each other, drawn between their reported positions. */
+  private updateMesh(drones: DroneState[]): void {
+    const pos = new Map(drones.map(d => [d.drone_id, [d.longitude, d.latitude] as [number, number]]));
+    const features: Feature[] = [];
+    for (const d of drones) {
+      for (const l of d.mesh?.links ?? []) {
+        const peer = pos.get(l.peer_id);
+        if (!peer || l.peer_id < d.drone_id) continue; // each pair once
+        features.push({
+          type: 'Feature',
+          properties: { consistent: l.consistent },
+          geometry: { type: 'LineString', coordinates: [pos.get(d.drone_id)!, peer] },
+        });
+      }
+    }
+    (this.map!.getSource('mesh') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
   }
 
   private savedBasemap(): Basemap {
@@ -312,6 +342,7 @@ export class TheatreMap implements OnDestroy {
     (map.getSource('paths') as GeoJSONSource).setData({ type: 'FeatureCollection', features: pathFeatures });
 
     this.updateTrails(drones);
+    this.updateMesh(drones);
 
     const seen = new Set<number>();
     for (const d of drones) {

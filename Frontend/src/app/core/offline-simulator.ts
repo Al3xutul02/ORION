@@ -1,5 +1,7 @@
 import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
+import { computeMesh, describeMesh } from './mesh';
+import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
 
@@ -23,6 +25,7 @@ const SECTORS: Record<'A' | 'B', Sector> = {
 const ANGULAR_SPEED = 0.08; // rad/s
 const SPOOF_OFFSET = { lat: 0.0042, lon: 0.0038 };
 const EGRESS_SPEED_MS = 22;
+const CRUISE_ALT_M = 120;
 
 // Hostile mobile EW emitter: enters from the south-east, crosses Sector 4, withdraws into Bravo.
 const JAMMER = {
@@ -76,6 +79,12 @@ interface SimDrone {
   route: 'RTL' | 'CORRIDOR' | 'ROUTE';
   batteryUsed: number; // % drained; weather makes it drain faster
   weatherAlert: number | null; // id of the over-limit weather zone already reported
+  onOrbit: boolean; // flying the patrol orbit (not still on the way to it)
+  patrolRate: number; // rad/s around the orbit, set by the spacing coordinator (core/patrol.ts)
+  /** Where a loitering drone holds off the orbit: undefined = not decided yet, null = in place. */
+  holdPoint?: [number, number] | null;
+  repositioning: boolean;
+  altitude: number;
 }
 
 interface Jammer {
@@ -100,6 +109,8 @@ export class OfflineSimulator {
   private zones: Zone[] = [];
   private recs: Recommendation[] = [];
   private milestones = new Set<string>();
+  /** Drones on each sector's orbit at the last tick, by sector name. */
+  private patrolMembers = new Map<string, Set<number>>();
   private jammer: Jammer | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
@@ -136,8 +147,12 @@ export class OfflineSimulator {
     this.drones = fleet.map(([sector, angle], i) => ({
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
       safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
-      batteryUsed: 0, weatherAlert: null,
+      batteryUsed: 0, weatherAlert: null, onOrbit: true, patrolRate: ANGULAR_SPEED,
+      repositioning: false, altitude: CRUISE_ALT_M,
     }));
+    this.patrolMembers = new Map(
+      Object.values(SECTORS).map(s => [s.name, new Set(this.drones.filter(d => d.sector === s).map(d => d.id))]),
+    ); // the starting formation
     for (const d of this.drones) this.move(d, 0); // place on the patrol orbit before the first tick
     this.ledger.reset();
     this.log('SYSTEM_INITIALIZED', null, {
@@ -165,6 +180,7 @@ export class OfflineSimulator {
 
     this.moveJammer(dt);
     this.driftWeather(dt);
+    this.coordinatePatrol();
     for (const d of this.drones) {
       this.move(d, dt);
       this.updateRecalibration(d, dt);
@@ -630,30 +646,97 @@ export class OfflineSimulator {
     }
   }
 
+  /** A loitering drone steps out of the patrol orbit's path (core/patrol.ts), at patrol speed. */
+  private holdOffOrbit(d: SimDrone, dt: number): void {
+    if (d.holdPoint === undefined) {
+      // Hazards the drone is already inside don't count: it is leaving them anyway.
+      const zones = hazardZones(this.zones).filter(z => distanceM(d.lat, d.lon, z.center![0], z.center![1]) > z.radius_m!);
+      const clear = (lat: number, lon: number) =>
+        !zones.some(z => segmentIntersectsCircle(d.lat, d.lon, lat, lon, z.center![0], z.center![1], z.radius_m!));
+      d.holdPoint = holdPoint(d.lat, d.lon, d.sector, clear);
+      if (d.holdPoint === null && isOnOrbit(d.lat, d.lon, d.sector)) d.altitude = CRUISE_ALT_M + HOLD_CLIMB_M;
+    }
+    if (!d.holdPoint || dt === 0) {
+      d.repositioning = false;
+      return;
+    }
+    const [tLat, tLon] = d.holdPoint;
+    const dist = distanceM(d.lat, d.lon, tLat, tLon);
+    const budget = (EGRESS_SPEED_MS / 2) * dt; // patrol speed: no reason to rush
+    if (dist <= budget) {
+      d.lat = tLat;
+      d.lon = tLon;
+      d.repositioning = false;
+    } else {
+      d.lat += ((tLat - d.lat) * budget) / dist;
+      d.lon += ((tLon - d.lon) * budget) / dist;
+      d.repositioning = true;
+    }
+  }
+
+  /** Keeps each sector's orbit evenly spaced; logs when a drone joins or leaves it. */
+  private coordinatePatrol(): void {
+    const members = new Map<string, Set<number>>();
+    for (const sector of Object.values(SECTORS)) {
+      const onOrbit = this.drones.filter(d => d.sector === sector && d.mode === 'PATROL' && d.onOrbit);
+      const rates = spacingRates(new Map(onOrbit.map(d => [d.id, d.angle])), ANGULAR_SPEED);
+      for (const d of onOrbit) d.patrolRate = rates.get(d.id)!;
+      members.set(sector.name, new Set(onOrbit.map(d => d.id)));
+    }
+    const previous = this.patrolMembers;
+    this.patrolMembers = members;
+    for (const [sector, now] of members) {
+      const before = previous.get(sector)!;
+      const joined = [...now].filter(i => !before.has(i)).sort((a, b) => a - b);
+      const left = [...before].filter(i => !now.has(i)).sort((a, b) => a - b);
+      if (!joined.length && !left.length) continue;
+      const single = joined.length + left.length === 1; // then the log row already names the drone
+      const change = single
+        ? `${joined.length ? 'Joined' : 'Left'} the ${sector} orbit`
+        : [...joined.map(i => `Drone ${i} joined`), ...left.map(i => `Drone ${i} left`)].join(', ') + ` (${sector})`;
+      const n = now.size;
+      this.log('PATROL_REBALANCED', single ? (joined[0] ?? left[0]) : null, {
+        description: `${change}: ${n} drone(s) on patrol` + (n >= 2 ? `, re-spacing to ${Math.round(360 / n)} deg apart` : ''),
+        sector, joined, left, patrol_drones: [...now].sort((a, b) => a - b),
+      }, 'ORION_PATROL');
+    }
+  }
+
   private linkDown(d: SimDrone): boolean {
     return d.linkLostAt !== null;
   }
 
   private move(d: SimDrone, dt: number): void {
+    if (d.mode !== 'LOITER') {
+      d.holdPoint = undefined;
+      d.repositioning = false;
+    }
     if (d.mode === 'PATROL') {
+      d.altitude = CRUISE_ALT_M;
       const { center, orbit } = d.sector;
       const targetLat = center.lat + orbit.lat * Math.sin(d.angle);
       const targetLon = center.lon + orbit.lon * Math.cos(d.angle);
       const dist = distanceM(d.lat, d.lon, targetLat, targetLon);
       const budget = EGRESS_SPEED_MS * dt;
       if (dt > 0 && dist > budget * 1.5) {
+        d.onOrbit = false;
         const f = budget / dist;
         d.lat += (targetLat - d.lat) * f;
         d.lon += (targetLon - d.lon) * f;
       } else {
-        d.angle += ANGULAR_SPEED * dt;
+        d.onOrbit = true;
+        d.angle += d.patrolRate * dt;
         d.lat = center.lat + orbit.lat * Math.sin(d.angle);
         d.lon = center.lon + orbit.lon * Math.cos(d.angle);
       }
       return;
     }
     if (d.mode === 'LOITER') {
-      if (d.egressPath.length && this.elapsed >= d.loiterUntil) d.mode = 'EGRESS';
+      if (d.egressPath.length && this.elapsed >= d.loiterUntil) {
+        d.mode = 'EGRESS';
+        return;
+      }
+      this.holdOffOrbit(d, dt);
       return;
     }
     if (d.mode === 'EGRESS' && d.route === 'ROUTE' && this.routeLegBlocked(d)) {
@@ -711,6 +794,21 @@ export class OfflineSimulator {
 
   private states(): DroneState[] {
     const ts = new Date().toISOString();
+    // Drone-to-drone mesh: neighbours range each other by radio and vote on whose GPS is lying.
+    // Radio noise is deterministic here so the Demo plays out the same every time.
+    const meshView = computeMesh(
+      this.drones.map(d => {
+        const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+        return {
+          droneId: d.id,
+          truePos: [d.lat, d.lon] as [number, number],
+          reportedPos: [d.lat + off.lat, d.lon + off.lon] as [number, number],
+          online: d.mode !== 'LANDED' && !this.linkDown(d),
+        };
+      }),
+      distanceM,
+      (a, b) => 5 * Math.sin(a * 31 + b * 17 + this.elapsed * 3.1),
+    );
     return this.drones.map(d => {
       const spoofed = d.spoofedAt !== null;
       const jammed = d.jammedAt !== null;
@@ -738,7 +836,7 @@ export class OfflineSimulator {
         imu = 10;
         unc = Math.min(450, 60 + t * 6);
         consensus = 15;
-        reasons.push('Impossible position jump (≈560 m in 0.5 s)', 'Neighbor consensus mismatch (diverged from patrol formation)');
+        reasons.push('Impossible position jump (≈560 m in 0.5 s)');
       }
       if (jammed) {
         const t = this.elapsed - d.jammedAt!;
@@ -750,6 +848,15 @@ export class OfflineSimulator {
           'GPS lost, dead reckoning active',
           peersHit ? 'Peers in same area degraded: localized interference' : 'Peers nominal: drone-level fault',
         );
+      }
+      const mv = meshView.get(d.id);
+      if (mv && mv.score !== null) {
+        // Peers measured their range to this drone by radio: that beats comparing GPS positions.
+        consensus = mv.score;
+        const why = describeMesh(mv);
+        if (why) reasons.push(why);
+      } else if (spoofed) {
+        reasons.push('Neighbor consensus mismatch (diverged from patrol formation)');
       }
       if (sats < 6 && !spoofed && !jammed) reasons.push('Low satellite count');
       const link = Math.max(0, Math.min(100, rssi, 100 - drop * 2));
@@ -766,8 +873,8 @@ export class OfflineSimulator {
 
       const flightMode = d.mode === 'PATROL' ? 'GUIDED' : d.mode === 'EGRESS' ? d.route : d.mode;
       return {
-        drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : 120,
-        ground_speed: d.mode === 'PATROL' ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,
+        drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : d.altitude,
+        ground_speed: d.mode === 'PATROL' || d.repositioning ? 12 : d.mode === 'EGRESS' ? EGRESS_SPEED_MS : 0,
         heading: ((d.angle * 180) / Math.PI + 90) % 360,
         fix_type: fix, satellites_visible: sats, eph,
         battery_remaining: Math.round(Math.max(20, 100 - d.batteryUsed) * 10) / 10,
@@ -777,6 +884,7 @@ export class OfflineSimulator {
           drone_id: d.id, trust_score: score, trust_status: status, gps_score: gps, imu_score: imu,
           link_score: link, consensus_score: consensus, command_score: 100, uncertainty_radius_m: unc, reason,
         },
+        mesh: mv ?? null,
         last_updated: ts,
       };
     });

@@ -40,7 +40,30 @@ export interface DroneState {
   uncertainty_radius_m: number;
   reason: string;
   scores?: ScoreBreakdown;
+  /** Drone-to-drone mesh view (Backend/app/services/mesh.py, core/mesh.ts). */
+  mesh?: MeshView | null;
+  /** SIM = ORION's simulator; MAVLINK = an external vehicle (SITL, real drone) heard over UDP. */
+  source?: 'SIM' | 'MAVLINK';
+  mavlink_sysid?: number;
+  mavlink_address?: string;
   last_updated: string;
+}
+
+export interface MeshLink {
+  peer_id: number;
+  /** Distance between the two GPS-reported positions. */
+  gps_distance_m: number;
+  /** Distance measured by radio time-of-flight (independent of GPS). */
+  radio_range_m: number;
+  consistent: boolean;
+}
+
+export interface MeshView {
+  neighbors: number;
+  /** 0-100, or null with no neighbour in radio range. */
+  score: number | null;
+  status: 'TRUSTED' | 'OUTLIER' | 'DISPUTED' | 'ALONE';
+  links: MeshLink[];
 }
 
 export interface Zone {
