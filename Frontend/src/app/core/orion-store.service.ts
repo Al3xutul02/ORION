@@ -86,6 +86,7 @@ export class OrionStore implements OnDestroy {
   readonly busy = signal(false);
   readonly randomIntervalMin = signal<number>(this.savedIntervalMin());
   readonly randomIntervalMax = signal<number>(this.savedIntervalMax());
+  readonly randomEventsEnabled = signal<boolean>(this.savedRandomEventsEnabled());
   readonly copilot = signal<CopilotMessage[]>([]);
   readonly copilotBusy = signal(false);
   /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
@@ -218,7 +219,7 @@ export class OrionStore implements OnDestroy {
     this.socket = ws;
     ws.onopen = () => {
       this.link.set('online');
-      this.api.setRandomInterval(this.randomIntervalMin(), this.randomIntervalMax()).catch(() => {});
+      this.api.setRandomInterval(this.randomIntervalMin(), this.randomIntervalMax(), this.randomEventsEnabled()).catch(() => {});
     };
     ws.onmessage = ev => {
       try {
@@ -281,6 +282,11 @@ export class OrionStore implements OnDestroy {
       if (this.randomIntervalMin() !== u.random_interval_min || this.randomIntervalMax() !== u.random_interval_max) {
         this.randomIntervalMin.set(u.random_interval_min);
         this.randomIntervalMax.set(u.random_interval_max);
+      }
+    }
+    if (u.random_events_enabled !== undefined) {
+      if (this.randomEventsEnabled() !== u.random_events_enabled) {
+        this.randomEventsEnabled.set(u.random_events_enabled);
       }
     }
     this.trustHistory.update(h => {
@@ -706,9 +712,35 @@ export class OrionStore implements OnDestroy {
     } catch { /* storage unavailable */ }
 
     if (this.mode() === 'live') {
-      this.api.setRandomInterval(minVal, maxVal).catch((err) => {
+      this.api.setRandomInterval(minVal, maxVal, this.randomEventsEnabled()).catch((err) => {
         console.warn('Failed to update random event interval on backend', err);
       });
+    }
+  }
+
+  toggleRandomEvents(): void {
+    this.setRandomEventsEnabled(!this.randomEventsEnabled());
+  }
+
+  setRandomEventsEnabled(enabled: boolean): void {
+    this.randomEventsEnabled.set(enabled);
+    try {
+      localStorage.setItem('orion.randomEventsEnabled', String(enabled));
+    } catch { /* storage unavailable */ }
+
+    if (this.mode() === 'live') {
+      this.api.toggleRandomEvents(enabled).catch((err) => {
+        console.warn('Failed to toggle random events on backend', err);
+      });
+    }
+  }
+
+  private savedRandomEventsEnabled(): boolean {
+    try {
+      const v = localStorage.getItem('orion.randomEventsEnabled');
+      return v === null ? true : v === 'true';
+    } catch {
+      return true;
     }
   }
 

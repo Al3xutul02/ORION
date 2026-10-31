@@ -101,17 +101,28 @@ def test_aar_verify(client):
 
 
 def test_config_random_interval(client):
-    res = client.post("/api/v1/simulation/config-random-interval", json={"min_s": 4.0, "max_s": 8.0})
+    res = client.post("/api/v1/simulation/config-random-interval", json={"min_s": 4.0, "max_s": 8.0, "enabled": False})
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "configured"
     assert data["random_interval_min"] == 4.0
     assert data["random_interval_max"] == 8.0
+    assert data["random_events_enabled"] is False
 
     st = client.get("/api/v1/simulation/status")
     assert st.status_code == 200
     assert st.json()["random_interval_min"] == 4.0
     assert st.json()["random_interval_max"] == 8.0
+    assert st.json()["random_events_enabled"] is False
+
+    # Test toggling random events endpoint
+    t_res = client.post("/api/v1/simulation/toggle-random-events", json={"enabled": True})
+    assert t_res.status_code == 200
+    assert t_res.json()["random_events_enabled"] is True
+
+    t_toggle = client.post("/api/v1/simulation/toggle-random-events")
+    assert t_toggle.status_code == 200
+    assert t_toggle.json()["random_events_enabled"] is False
 
     bad = client.post("/api/v1/simulation/config-random-interval", json={"min_s": 10.0, "max_s": 2.0})
     assert bad.status_code == 400

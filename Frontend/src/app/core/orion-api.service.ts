@@ -96,11 +96,20 @@ export class OrionApi {
     return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`));
   }
 
-  setRandomInterval(min_s: number, max_s: number) {
+  setRandomInterval(min_s: number, max_s: number, enabled?: boolean) {
     return firstValueFrom(
-      this.http.post<{ status: string; random_interval_min: number; random_interval_max: number }>(
+      this.http.post<{ status: string; random_interval_min: number; random_interval_max: number; random_events_enabled?: boolean }>(
         `${this.base}/simulation/config-random-interval`,
-        { min_s, max_s },
+        { min_s, max_s, enabled },
+      ),
+    );
+  }
+
+  toggleRandomEvents(enabled?: boolean) {
+    return firstValueFrom(
+      this.http.post<{ status: string; random_events_enabled: boolean }>(
+        `${this.base}/simulation/toggle-random-events`,
+        enabled !== undefined ? { enabled } : {},
       ),
     );
   }

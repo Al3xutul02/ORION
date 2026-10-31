@@ -95,6 +95,7 @@ export interface FleetUpdate {
   drones: DroneState[];
   random_interval_min?: number;
   random_interval_max?: number;
+  random_events_enabled?: boolean;
 }
 
 export interface SnapshotMessage {

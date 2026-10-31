@@ -78,7 +78,7 @@
       <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
-      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+      <div class="interval-field" [class.disabled]="!store.randomEventsEnabled()" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
         <span class="interval-label">Event interval:</span>
         <input
           type="number"
@@ -88,6 +88,7 @@
           step="0.5"
           [value]="store.randomIntervalMin()"
           (change)="onIntervalMinChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Minimum seconds between random events"
           aria-label="Minimum seconds"
         />
@@ -100,22 +101,41 @@
           step="0.5"
           [value]="store.randomIntervalMax()"
           (change)="onIntervalMaxChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Maximum seconds between random events"
           aria-label="Maximum seconds"
         />
         <span class="interval-unit">s</span>
       </div>
+      <button
+        class="btn sm toggle-btn"
+        [class.on]="store.randomEventsEnabled()"
+        type="button"
+        (click)="store.toggleRandomEvents()"
+        [attr.aria-pressed]="store.randomEventsEnabled()"
+        [title]="store.randomEventsEnabled() ? 'Disable automatic random battlefield events' : 'Enable automatic random battlefield events'"
+      >
+        <span class="toggle-indicator"></span>
+        {{ store.randomEventsEnabled() ? 'Random events: ON' : 'Random events: OFF' }}
+      </button>
     </div>
   } @else {
     <div class="live-banner">
       <span class="pulse-dot" [class.active]="store.running()"></span>
       <span class="live-title">Live EW Simulation</span>
-      <span class="live-sub">{{ liveTheatreSummary() }} &middot; Random battlefield events occur automatically while running</span>
+      <span class="live-sub">
+        {{ liveTheatreSummary() }} &middot;
+        @if (store.randomEventsEnabled()) {
+          Random battlefield events occur automatically while running
+        } @else {
+          Automatic random battlefield events are paused
+        }
+      </span>
     </div>
     <div class="inject">
       <span class="hint">Battlefield events:</span>
       <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">&#127922; Random event</button>
-      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+      <div class="interval-field" [class.disabled]="!store.randomEventsEnabled()" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
         <span class="interval-label">Interval:</span>
         <input
           type="number"
@@ -125,6 +145,7 @@
           step="0.5"
           [value]="store.randomIntervalMin()"
           (change)="onIntervalMinChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Minimum seconds between random events"
           aria-label="Minimum seconds"
         />
@@ -137,11 +158,23 @@
           step="0.5"
           [value]="store.randomIntervalMax()"
           (change)="onIntervalMaxChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Maximum seconds between random events"
           aria-label="Maximum seconds"
         />
         <span class="interval-unit">s</span>
       </div>
+      <button
+        class="btn sm toggle-btn"
+        [class.on]="store.randomEventsEnabled()"
+        type="button"
+        (click)="store.toggleRandomEvents()"
+        [attr.aria-pressed]="store.randomEventsEnabled()"
+        [title]="store.randomEventsEnabled() ? 'Disable automatic random battlefield events' : 'Enable automatic random battlefield events'"
+      >
+        <span class="toggle-indicator"></span>
+        {{ store.randomEventsEnabled() ? 'Random events: ON' : 'Random events: OFF' }}
+      </button>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
