@@ -7,6 +7,7 @@ from app.core.database import Base, engine, SessionLocal
 from app.api.api_v1 import api_router
 from app.api.websocket.telemetry_ws import router as ws_router
 from app.services.simulator import simulator
+from app.services.mavlink_bridge import mavlink_input
 from app.services.aar_service import aar_service
 from app.models.audit import AuditLog
 
@@ -41,6 +42,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize database schema: %s", e)
 
+    # Listen for external MAVLink vehicles (SITL, real drones, QGroundControl forwarding)
+    await mavlink_input.start()
+
     # Start fleet simulator for real-time telemetry feed
     if settings.SIMULATION_DEMO_ENABLED:
         logger.info("Autostarting fleet patrol simulation...")
@@ -51,6 +55,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down ORION GCS...")
     simulator.stop()
+    mavlink_input.stop()
 
 
 app = FastAPI(

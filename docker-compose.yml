@@ -40,8 +40,12 @@ services:
       MYSQL_USER: ${MYSQL_USER:-orion}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-orion_secret}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MAVLINK_OUT_HOST: host.docker.internal  # QGroundControl on the host, UDP 14550
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+      - "14560:14560/udp"  # MAVLink input: SITL / QGroundControl forwarding
 
   frontend:
     build:

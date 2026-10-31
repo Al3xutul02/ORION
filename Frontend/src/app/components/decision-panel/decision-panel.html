@@ -73,7 +73,9 @@
     @if (store.selectedDrone(); as d) {
       <p class="current">
         Drone {{ d.drone_id }} is flying <strong class="mono">{{ d.flight_mode }}</strong>.
-        @if (canCommand()) {
+        @if (d.source === 'MAVLINK') {
+          It is an external MAVLink vehicle: ORION only monitors it, command it from its own ground station.
+        } @else if (canCommand()) {
           Choose what it should do next:
         }
       </p>
@@ -104,8 +106,8 @@
                 <button
                   class="btn sm"
                   type="button"
-                  [disabled]="!canCommand()"
-                  [title]="canCommand() ? 'Send a signed command' : 'Connect to the live backend or switch to Demo mode'"
+                  [disabled]="!canCommand() || d.source === 'MAVLINK'"
+                  [title]="d.source === 'MAVLINK' ? 'External MAVLink vehicles are read-only in ORION' : canCommand() ? 'Send a signed command' : 'Connect to the live backend or switch to Demo mode'"
                   (click)="confirming.set(a.id)"
                 >
                   Send

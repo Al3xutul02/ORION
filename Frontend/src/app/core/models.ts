@@ -42,6 +42,10 @@ export interface DroneState {
   scores?: ScoreBreakdown;
   /** Drone-to-drone mesh view (Backend/app/services/mesh.py, core/mesh.ts). */
   mesh?: MeshView | null;
+  /** SIM = ORION's simulator; MAVLINK = an external vehicle (SITL, real drone) heard over UDP. */
+  source?: 'SIM' | 'MAVLINK';
+  mavlink_sysid?: number;
+  mavlink_address?: string;
   last_updated: string;
 }
 

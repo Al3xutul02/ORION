@@ -4,7 +4,11 @@
       <div class="score mono">{{ d.trust_score | number: '1.0-0' }}</div>
       <div class="ident">
         <strong>Drone {{ d.drone_id }}</strong>
-        <span class="mono">ORION-{{ d.drone_id }} · {{ d.flight_mode }}</span>
+        @if (d.source === 'MAVLINK') {
+          <span class="mono">MAVLink sysid {{ d.mavlink_sysid }} · {{ d.mavlink_address }} · {{ d.flight_mode }} · read-only</span>
+        } @else {
+          <span class="mono">ORION-{{ d.drone_id }} · {{ d.flight_mode }}</span>
+        }
       </div>
       <button type="button" class="close" aria-label="Close details" (click)="store.closeDetails()">×</button>
     </header>

@@ -21,7 +21,11 @@
             {{ d.trust_score | number: '1.0-0' }}
           </div>
           <div class="ident">
-            <strong>Drone {{ d.drone_id }}</strong>
+            <strong>Drone {{ d.drone_id }}
+              @if (d.source === 'MAVLINK') {
+                <span class="chip accent" title="External MAVLink vehicle, monitored read-only">MAVLink</span>
+              }
+            </strong>
             <span class="meta mono">{{ d.flight_mode }} · {{ d.altitude | number: '1.0-0' }} m · {{ d.battery_remaining | number: '1.0-0' }}%</span>
           </div>
           <svg class="spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">

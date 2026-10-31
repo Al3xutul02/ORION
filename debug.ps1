@@ -87,6 +87,10 @@ $runArgs = @(
 )
 if ($ExposeDb) { $runArgs += @('-p', "127.0.0.1:${DbPort}:3306") }
 
+# MAVLink bridge: simulated drones go to QGroundControl on the host (UDP 14550);
+# external vehicles (SITL, QGC forwarding) come in on UDP 14560.
+$runArgs += @('-p', '14560:14560/udp', '-e', 'MAVLINK_OUT_HOST=host.docker.internal')
+
 # Forward ANTHROPIC_API_KEY if present in host env or Backend/.env so the AAR Copilot works inside the container.
 $apiKey = $env:ANTHROPIC_API_KEY
 if (-not $apiKey -and (Test-Path "$PSScriptRoot\Backend\.env")) {

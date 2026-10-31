@@ -9,6 +9,7 @@ from app.services.trust_evaluator import trust_evaluator, haversine_distance_m
 from app.services.theatre_rules import theatre_rules, line_segment_intersects_circle
 from app.services.aar_service import aar_service
 from app.services import mesh, weather
+from app.services.mavlink_bridge import mavlink_input, mavlink_output
 from app.services.command_manager import command_manager
 from app.core.database import SessionLocal
 from app.models.recommendation import ActionRecommendation
@@ -877,7 +878,10 @@ class OrionFleetSimulator:
                     wx_fx = weather.effects(wx)
                     if d_data["mode"] != "LANDED":
                         d_data["battery_used"] = (d_data.get("battery_used", 0.0) + 0.08 * dt * wx_fx["battery_mult"]) % 80.0
-                    fleet_telemetry.append(self.get_telemetry(d_id))
+                    fleet_telemetry.append({**self.get_telemetry(d_id), "source": "SIM"})
+
+                # External MAVLink vehicles (SITL, real drones) join the fleet read-only.
+                fleet_telemetry.extend(mavlink_input.snapshot())
 
                 # Drone-to-drone mesh: neighbours range each other by radio and vote on whose GPS is lying.
                 mesh_view = mesh.compute_mesh(
@@ -906,7 +910,7 @@ class OrionFleetSimulator:
                         mesh_reason=mesh.describe(peer_view),
                     )
 
-                    wx = self.drones[d_id].get("weather_now")
+                    wx = self.drones.get(d_id, {}).get("weather_now")
                     if wx:
                         note = f"Weather: {wx['name']} ({weather.describe(wx)}), link/battery effects are weather, not EW"
                         nominal = score_breakdown.reason == "Sensors & consensus nominal"
@@ -922,6 +926,9 @@ class OrionFleetSimulator:
                         "last_updated": datetime.now(timezone.utc).isoformat()
                     }
                     drone_states.append(state_dict)
+
+                # Publish the simulated drones as MAVLink vehicles (QGroundControl sees what they report).
+                mavlink_output.publish([s for s in drone_states if s.get("source") == "SIM"])
 
                 # Broadcast only active zones to frontend map
                 ws_payload = {
