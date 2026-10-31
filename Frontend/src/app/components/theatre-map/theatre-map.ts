@@ -3,7 +3,7 @@ import {
 } from '@angular/core';
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
-import { circleRing, distanceM, egressPaths, evaluateActions, weatherPolygon } from '../../core/geo';
+import { circleRing, distanceM, egressPaths, evaluateActions, orderPolygonVertices, weatherPolygon } from '../../core/geo';
 import { DroneState, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 import { DroneDetails } from '../drone-details/drone-details';
@@ -59,8 +59,8 @@ export class TheatreMap implements OnDestroy {
   private loiterMarker: Marker | null = null;
   private isDrawingZone = false;
   private drawCenter: [number, number] | null = null;
-  protected corridorPoints: [number, number][] = [];
-  protected objectivePoints: [number, number][] = [];
+  readonly corridorPoints = signal<[number, number][]>([]);
+  readonly objectivePoints = signal<[number, number][]>([]);
 
   constructor() {
     afterNextRender(() => this.init());
@@ -174,13 +174,26 @@ export class TheatreMap implements OnDestroy {
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-dasharray': [3, 2], 'line-opacity': 0.8 },
     });
     map.addLayer({
-      id: 'corridor', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
+      id: 'corridor', type: 'line', source: 'zones',
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'zone_type'], 'SAFE_CORRIDOR']],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 14, 'line-opacity': 0.14 },
     });
     map.addLayer({
-      id: 'corridor-center', type: 'line', source: 'zones', filter: ['==', ['geometry-type'], 'LineString'],
+      id: 'corridor-center', type: 'line', source: 'zones',
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'zone_type'], 'SAFE_CORRIDOR']],
       paint: { 'line-color': ZONE_COLORS['SAFE_CORRIDOR'], 'line-width': 1.5, 'line-dasharray': [1, 2] },
+    });
+    map.addLayer({
+      id: 'objective-line-glow', type: 'line', source: 'zones',
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'zone_type'], 'OBJECTIVE']],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ZONE_COLORS['OBJECTIVE'], 'line-width': 14, 'line-opacity': 0.2 },
+    });
+    map.addLayer({
+      id: 'objective-line-core', type: 'line', source: 'zones',
+      filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'zone_type'], 'OBJECTIVE']],
+      paint: { 'line-color': ZONE_COLORS['OBJECTIVE'], 'line-width': 2.5, 'line-dasharray': [4, 3] },
     });
 
     map.addSource('uncertainty', { type: 'geojson', data: empty() });
@@ -249,8 +262,25 @@ export class TheatreMap implements OnDestroy {
       paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.22 },
     });
     map.addLayer({
+      id: 'preview-objective-line-glow', type: 'line', source: 'preview-objective',
+      filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#f59e0b', 'line-width': 14, 'line-opacity': 0.2 },
+    });
+    map.addLayer({
       id: 'preview-objective-line', type: 'line', source: 'preview-objective',
-      paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [4, 3] },
+      filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'LineString']],
+      paint: { 'line-color': '#f59e0b', 'line-width': 2.5, 'line-dasharray': [4, 3] },
+    });
+    map.addLayer({
+      id: 'preview-objective-points', type: 'circle', source: 'preview-objective',
+      filter: ['==', ['geometry-type'], 'Point'],
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#f59e0b',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
     });
 
     this.ready = true;
@@ -318,6 +348,12 @@ export class TheatreMap implements OnDestroy {
             type: 'Feature',
             properties: { ...props, is_objective: true },
             geometry: { type: 'Polygon', coordinates: [ring] },
+          });
+        } else if (ring.length === 2) {
+          features.push({
+            type: 'Feature',
+            properties: { ...props, is_objective: true, is_line: true },
+            geometry: { type: 'LineString', coordinates: ring },
           });
         }
       } else {
@@ -398,7 +434,7 @@ export class TheatreMap implements OnDestroy {
       if (z.zone_type === 'PATROL') {
         el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
       } else if (z.zone_type === 'OBJECTIVE') {
-        el.innerHTML = `<span class="objective-icon">&#9670;</span><span>${escapeHtml(z.name)}</span><em>Priority Area</em>`;
+        el.innerHTML = `<span class="objective-icon">&#9670;</span><span class="objective-name">${escapeHtml(z.name)}</span>`;
       } else {
         const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : (z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS') ? 'detected by ORION' : '';
         el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
@@ -512,22 +548,74 @@ export class TheatreMap implements OnDestroy {
     }
   }
 
+  private updateObjectivePreview(mouseLngLat?: [number, number]): void {
+    if (!this.map) return;
+    const pts = this.objectivePoints();
+    if (!pts.length) {
+      (this.map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData(empty());
+      return;
+    }
+
+    const features: any[] = [];
+    for (const pt of pts) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Point', coordinates: [pt[1], pt[0]] },
+      });
+    }
+
+    if (pts.length >= 3) {
+      const clean = orderPolygonVertices(pts);
+      const ring = clean.map(p => [p[1], p[0]]);
+      ring.push([ring[0][0], ring[0][1]]);
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [ring] },
+      });
+    } else if (pts.length === 2) {
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: pts.map(p => [p[1], p[0]]) },
+      });
+    }
+
+    if (mouseLngLat && pts.length >= 1) {
+      const last = pts[pts.length - 1];
+      features.push({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [[last[1], last[0]], mouseLngLat] },
+      });
+    }
+
+    (this.map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }
+
   protected finishObjective(): void {
-    if (this.objectivePoints.length >= 3) {
+    const rawPts = this.objectivePoints();
+    const cleanPts = orderPolygonVertices(rawPts);
+    if (cleanPts.length >= 2) {
       const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'OBJECTIVE').length;
       const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
       const label = greek[count] ?? `Sector-${count + 1}`;
-      this.store.createObjectiveZone(`Objective Zone ${label}`, this.objectivePoints);
+      this.store.createObjectiveZone(`Objective Zone ${label}`, cleanPts);
     }
     this.cancelMapMode();
   }
 
   protected finishCorridor(): void {
-    if (this.corridorPoints.length >= 2) {
+    const pts = this.corridorPoints();
+    if (pts.length >= 2) {
       const count = this.store.zones().filter(z => z.is_active && z.zone_type === 'SAFE_CORRIDOR').length;
       const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
       const label = greek[count] ?? `Route-${count + 1}`;
-      this.store.createSafeCorridor(`Safe Corridor ${label}`, this.corridorPoints);
+      this.store.createSafeCorridor(`Safe Corridor ${label}`, pts);
     }
     this.cancelMapMode();
   }
@@ -538,8 +626,8 @@ export class TheatreMap implements OnDestroy {
       this.map?.dragPan.enable();
     }
     this.drawCenter = null;
-    this.corridorPoints = [];
-    this.objectivePoints = [];
+    this.corridorPoints.set([]);
+    this.objectivePoints.set([]);
     (this.map?.getSource('preview-zone') as GeoJSONSource | undefined)?.setData(empty());
     (this.map?.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData(empty());
     (this.map?.getSource('preview-objective') as GeoJSONSource | undefined)?.setData(empty());
@@ -571,6 +659,8 @@ export class TheatreMap implements OnDestroy {
             geometry: { type: 'Polygon', coordinates: [ring] },
           }],
         });
+      } else if (mode === 'create_objective' && this.objectivePoints().length >= 1) {
+        this.updateObjectivePreview([e.lngLat.lng, e.lngLat.lat]);
       }
     });
 
@@ -602,39 +692,24 @@ export class TheatreMap implements OnDestroy {
     map.on('click', e => {
       const mode = this.store.mapMode();
       if (mode === 'create_corridor') {
-        this.corridorPoints.push([e.lngLat.lat, e.lngLat.lng]);
-        if (this.corridorPoints.length >= 2) {
+        this.corridorPoints.update(pts => [...pts, [e.lngLat.lat, e.lngLat.lng]]);
+        const pts = this.corridorPoints();
+        if (pts.length >= 2) {
           (map.getSource('preview-corridor') as GeoJSONSource | undefined)?.setData({
             type: 'FeatureCollection',
             features: [{
               type: 'Feature',
               properties: {},
-              geometry: { type: 'LineString', coordinates: this.corridorPoints.map(pt => [pt[1], pt[0]]) },
+              geometry: { type: 'LineString', coordinates: pts.map(pt => [pt[1], pt[0]]) },
             }],
           });
         }
       } else if (mode === 'create_objective') {
-        this.objectivePoints.push([e.lngLat.lat, e.lngLat.lng]);
-        if (this.objectivePoints.length >= 3) {
-          const ring = this.objectivePoints.map(pt => [pt[1], pt[0]]);
-          ring.push([ring[0][0], ring[0][1]]);
-          (map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData({
-            type: 'FeatureCollection',
-            features: [{
-              type: 'Feature',
-              properties: {},
-              geometry: { type: 'Polygon', coordinates: [ring] },
-            }],
-          });
-        } else if (this.objectivePoints.length === 2) {
-          (map.getSource('preview-objective') as GeoJSONSource | undefined)?.setData({
-            type: 'FeatureCollection',
-            features: [{
-              type: 'Feature',
-              properties: {},
-              geometry: { type: 'LineString', coordinates: this.objectivePoints.map(pt => [pt[1], pt[0]]) },
-            }],
-          });
+        const current = this.objectivePoints();
+        const newPt: [number, number] = [e.lngLat.lat, e.lngLat.lng];
+        if (!current.length || distanceM(current[current.length - 1][0], current[current.length - 1][1], newPt[0], newPt[1]) > 5) {
+          this.objectivePoints.update(pts => [...pts, newPt]);
+          this.updateObjectivePreview();
         }
       } else if (mode === 'delete_zone') {
         const clickedLat = e.lngLat.lat;
@@ -659,12 +734,15 @@ export class TheatreMap implements OnDestroy {
           this.store.setMapMode('view');
           return;
         }
-        // Then objective zones (polygons)
+        // Then objective zones (polygons or lines)
         const activeObjectives = this.store.zones().filter(z => z.is_active && z.zone_type === 'OBJECTIVE' && z.waypoints?.length);
         const clickedObjective = activeObjectives.find(obj => {
           const nearVertex = obj.waypoints!.some(wp => distanceM(wp[0], wp[1], clickedLat, clickedLon) <= 220);
           if (nearVertex) return true;
-          return pointInPolygon(clickedLat, clickedLon, obj.waypoints!);
+          if (obj.waypoints!.length >= 3) {
+            return pointInPolygon(clickedLat, clickedLon, obj.waypoints!);
+          }
+          return false;
         });
         if (clickedObjective) {
           this.store.deleteZone(clickedObjective.id);

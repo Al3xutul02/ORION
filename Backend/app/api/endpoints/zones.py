@@ -64,9 +64,9 @@ def get_zones_geojson():
                         "coordinates": [lon, lat]  # GeoJSON is [lon, lat]
                     }
                 })
-        elif g_type == "POLYGON":
+        elif g_type in ("POLYGON", "LINE"):
             coords = [[pt[1], pt[0]] for pt in z.get("waypoints", [])]
-            if z_type == "OBJECTIVE":
+            if z_type == "OBJECTIVE" and len(coords) >= 3:
                 poly_coords = list(coords)
                 if poly_coords and poly_coords[0] != poly_coords[-1]:
                     poly_coords.append(poly_coords[0])

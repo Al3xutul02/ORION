@@ -18,25 +18,25 @@
       <span class="mode-text">Click and drag on map to define restricted threat center and radius</span>
     } @else if (store.mapMode() === 'create_corridor') {
       <span class="mode-icon ok">&#10148;</span>
-      <span class="mode-text">Click waypoints on map ({{ corridorPoints.length }} points added). Double-click or click Finish.</span>
+      <span class="mode-text">Click waypoints on map ({{ corridorPoints().length }} points added). Double-click or click Finish.</span>
       <button
         type="button"
         class="btn-finish-corridor"
-        [disabled]="corridorPoints.length < 2"
+        [disabled]="corridorPoints().length < 2"
         (click)="finishCorridor()"
       >
-        &#10003; Finish Corridor ({{ corridorPoints.length }})
+        &#10003; Finish Corridor ({{ corridorPoints().length }})
       </button>
     } @else if (store.mapMode() === 'create_objective') {
       <span class="mode-icon objective">&#9670;</span>
-      <span class="mode-text">Click vertices on map ({{ objectivePoints.length }} points added). Double-click or click Finish (min 3 points).</span>
+      <span class="mode-text">Click points on map ({{ objectivePoints().length }} added). Double-click or click Finish (min 2 points).</span>
       <button
         type="button"
         class="btn-finish-corridor"
-        [disabled]="objectivePoints.length < 3"
+        [disabled]="objectivePoints().length < 2"
         (click)="finishObjective()"
       >
-        &#10003; Finish Objective ({{ objectivePoints.length }})
+        &#10003; Finish Objective ({{ objectivePoints().length }})
       </button>
     } @else if (store.mapMode() === 'delete_zone') {
       <span class="mode-icon">&#10005;</span>

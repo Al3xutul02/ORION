@@ -221,24 +221,31 @@
     &.zone-BASE { color: var(--zone-base); }
     &.zone-SAFE_CORRIDOR { color: var(--zone-corridor); }
     &.zone-OBJECTIVE {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 7px;
+      font-size: 9.5px;
+      letter-spacing: 0.03em;
+      border-radius: 4px;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(245, 158, 11, 0.55);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
       color: var(--zone-objective);
-      border-color: rgba(245, 158, 11, 0.4);
-      background: rgba(15, 23, 42, 0.88);
-      padding: 3px 8px;
-      border-radius: var(--radius-sm);
-      border: 1px dashed rgba(245, 158, 11, 0.6);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+      white-space: nowrap;
 
       .objective-icon {
-        font-size: 11px;
-        margin-right: 4px;
-        color: var(--zone-objective);
+        font-size: 9px;
+        color: #f59e0b;
+        line-height: 1;
+        display: inline-block;
       }
 
-      em {
-        font-size: 9px;
-        color: #fbbf24;
-        opacity: 0.85;
+      .objective-name {
+        font-weight: 600;
+        color: #f59e0b;
       }
     }
     &.zone-INTERFERENCE { color: var(--zone-interference); }

@@ -615,23 +615,38 @@ class TheatreRulesEngine:
         self.zones.append(zone)
         return zone
 
+    @staticmethod
+    def _order_polygon_vertices(waypoints: List[List[float]]) -> List[List[float]]:
+        unique: List[List[float]] = []
+        for pt in waypoints:
+            if not any(abs(pt[0] - u[0]) < 0.00002 and abs(pt[1] - u[1]) < 0.00002 for u in unique):
+                unique.append(pt)
+        if len(unique) < 3:
+            return unique
+        c_lat = sum(p[0] for p in unique) / len(unique)
+        c_lon = sum(p[1] for p in unique) / len(unique)
+        import math
+        return sorted(unique, key=lambda p: math.atan2(p[0] - c_lat, p[1] - c_lon))
+
     def add_objective_zone(
         self,
         name: Optional[str],
         waypoints: List[List[float]]
     ) -> Dict[str, Any]:
-        """Creates a new operator-defined OBJECTIVE polygonal zone on the map."""
+        """Creates a new operator-defined OBJECTIVE zone (polygon or line) on the map."""
         if not name or not name.strip():
             count = len([z for z in self.zones if z.get("is_active", True) and z.get("zone_type") == "OBJECTIVE"])
             greek = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
             label = greek[count] if count < len(greek) else f"Area-{count + 1}"
             name = f"Objective Zone {label}"
+        clean_pts = self._order_polygon_vertices(waypoints) if len(waypoints) >= 3 else waypoints
+        geom_type = "POLYGON" if len(clean_pts) >= 3 else "LINE"
         zone = {
             "id": self._alloc_id(),
             "name": name.strip(),
             "zone_type": "OBJECTIVE",
-            "geometry_type": "POLYGON",
-            "waypoints": [[round(pt[0], 5), round(pt[1], 5)] for pt in waypoints],
+            "geometry_type": geom_type,
+            "waypoints": [[round(pt[0], 5), round(pt[1], 5)] for pt in clean_pts],
             "is_active": True,
             "detected_by": "OPERATOR"
         }

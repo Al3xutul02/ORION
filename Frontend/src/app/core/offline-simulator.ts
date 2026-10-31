@@ -1,4 +1,4 @@
-import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, segmentIntersectsCircle, weatherAt } from './geo';
+import { ActionOption, evaluateActions, egressPaths, distanceM, hazardZones, orderPolygonVertices, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { computeMesh, describeMesh } from './mesh';
 import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
@@ -257,6 +257,7 @@ export class OfflineSimulator {
   }
 
   addObjectiveZone(name: string, waypoints: [number, number][]): Zone {
+    const cleanPts: [number, number][] = orderPolygonVertices(waypoints);
     const count = this.zones.filter(z => z.zone_type === 'OBJECTIVE' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
     const label = greek[count] ?? `Sector-${count + 1}`;
@@ -265,7 +266,7 @@ export class OfflineSimulator {
       name: name || `Objective Zone ${label}`,
       zone_type: 'OBJECTIVE',
       geometry_type: 'POLYGON',
-      waypoints: waypoints.map(pt => [pt[0], pt[1]]),
+      waypoints: cleanPts.map(pt => [pt[0], pt[1]] as [number, number]),
       is_active: true,
       detected_by: 'OPERATOR',
     };

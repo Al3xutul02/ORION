@@ -62,15 +62,27 @@ describe('OfflineSimulator (extended exercise)', () => {
     expect(deleted).toBeTrue();
   });
 
-  it('supports creating and deleting objective zones', () => {
+  it('supports creating and deleting objective zones (polygons and lines)', () => {
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
-    const oz = sim.addObjectiveZone('Objective Zone Alpha', [[44.31, 23.80], [44.32, 23.82], [44.30, 23.83]]);
+    // Polygon with vertices out of order (cross order)
+    const oz = sim.addObjectiveZone('Objective Zone Alpha', [
+      [44.31, 23.80],
+      [44.32, 23.82],
+      [44.31, 23.82],
+      [44.32, 23.80],
+    ]);
     expect(oz.id).toBeGreaterThan(100);
     expect(oz.name).toBe('Objective Zone Alpha');
     expect(oz.zone_type).toBe('OBJECTIVE');
-    expect(oz.waypoints?.length).toBe(3);
+    expect(oz.geometry_type).toBe('POLYGON');
+    expect(oz.waypoints?.length).toBe(4);
 
-    const deleted = sim.deleteZone(oz.id);
-    expect(deleted).toBeTrue();
+    // 2-point line
+    const ozLine = sim.addObjectiveZone('Objective Line Bravo', [[44.31, 23.80], [44.32, 23.82]]);
+    expect(ozLine.geometry_type).toBe('POLYGON');
+    expect(ozLine.waypoints?.length).toBe(2);
+
+    expect(sim.deleteZone(oz.id)).toBeTrue();
+    expect(sim.deleteZone(ozLine.id)).toBeTrue();
   });
 });

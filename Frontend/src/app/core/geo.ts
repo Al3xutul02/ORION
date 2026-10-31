@@ -9,6 +9,19 @@ export function metersPerDegLon(lat: number): number {
   return M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180);
 }
 
+export function orderPolygonVertices(waypoints: [number, number][]): [number, number][] {
+  const unique: [number, number][] = [];
+  for (const pt of waypoints) {
+    if (!unique.some(u => Math.abs(pt[0] - u[0]) < 0.00002 && Math.abs(pt[1] - u[1]) < 0.00002)) {
+      unique.push(pt);
+    }
+  }
+  if (unique.length < 3) return unique;
+  const cLat = unique.reduce((a, b) => a + b[0], 0) / unique.length;
+  const cLon = unique.reduce((a, b) => a + b[1], 0) / unique.length;
+  return unique.slice().sort((a, b) => Math.atan2(a[0] - cLat, a[1] - cLon) - Math.atan2(b[0] - cLat, b[1] - cLon));
+}
+
 export function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const dy = (lat2 - lat1) * M_PER_DEG_LAT;
   const dx = (lon2 - lon1) * metersPerDegLon((lat1 + lat2) / 2);

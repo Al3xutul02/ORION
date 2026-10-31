@@ -72,6 +72,30 @@ def test_create_and_delete_objective_zone_api():
     assert theatre_rules.get_zone(zone_id) is None
 
 
+def test_create_linear_objective_zone_api():
+    """Operator can create a 2-point linear objective zone rendered as GeoJSON LineString."""
+    res = client.post("/api/v1/zones/objective", json={
+        "name": "Objective Line Recon",
+        "waypoints": [[44.3300, 23.8200], [44.3400, 23.8300]]
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Objective Line Recon"
+    assert data["zone_type"] == "OBJECTIVE"
+    assert data["geometry_type"] == "LINE"
+    zone_id = data["id"]
+
+    geo_res = client.get("/api/v1/zones/geojson")
+    assert geo_res.status_code == 200
+    features = geo_res.json()["features"]
+    feat = next((f for f in features if f["properties"]["id"] == zone_id), None)
+    assert feat is not None
+    assert feat["geometry"]["type"] == "LineString"
+
+    del_res = client.delete(f"/api/v1/zones/{zone_id}")
+    assert del_res.status_code == 200
+
+
 def test_safe_vs_risky_pathfinding():
     """
     Safe path strictly avoids interference & threat zones.
