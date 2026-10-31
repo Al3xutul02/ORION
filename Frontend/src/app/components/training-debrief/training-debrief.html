@@ -1,0 +1,90 @@
+@if (session(); as t) {
+  <div class="backdrop no-print" role="dialog" aria-modal="true" aria-label="Training debrief">
+    <section class="sheet">
+      <header>
+        <div>
+          <span class="kicker">AI training</span>
+          <h2>Debrief</h2>
+        </div>
+        @if (t.debrief; as d) {
+          <div class="score {{ scoreClass(d.score) }}">
+            <strong class="mono">{{ d.score }}</strong><span>/100 · {{ d.grade }}</span>
+          </div>
+        }
+      </header>
+
+      @if (!t.debrief) {
+        <p class="waiting">The instructor is reviewing the session...</p>
+      } @else {
+        @let d = t.debrief;
+        <p class="summary">{{ d.summary }}</p>
+
+        <div class="cols">
+          <div>
+            <h3 class="good">Ce a mers bine</h3>
+            <ul>
+              @for (s of d.strengths; track $index) { <li>{{ s }}</li> }
+            </ul>
+          </div>
+          <div>
+            <h3 class="warn">De îmbunătățit</h3>
+            <ul>
+              @for (s of d.improvements; track $index) { <li>{{ s }}</li> }
+            </ul>
+          </div>
+        </div>
+
+        <h3>Decizii (țintă: sub {{ target }} s)</h3>
+        @if (d.decisions.length) {
+          <table>
+            <thead><tr><th>T+</th><th>Dronă</th><th>Recomandare</th><th>Timp</th><th>Rezultat</th></tr></thead>
+            <tbody>
+              @for (r of d.decisions; track r.recId) {
+                <tr class="{{ speed(r) }}">
+                  <td class="mono">{{ r.issuedAt - t.startedAt | number: '1.0-0' }}s</td>
+                  <td>{{ r.droneId ? 'D' + r.droneId : '—' }}</td>
+                  <td>{{ actionRo(r.action) }}</td>
+                  <td class="mono">{{ r.reactionS === null ? '—' : (r.reactionS | number: '1.0-0') + ' s' }}</td>
+                  <td>{{ outcome(r) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        } @else {
+          <p class="dim">Nicio decizie de luat în această sesiune.</p>
+        }
+
+        @if (d.lines.length) {
+          <h3>Cum s-a calculat scorul</h3>
+          <ul class="lines">
+            @for (l of d.lines; track $index) { <li><span>{{ l.label }}</span><span class="mono">{{ l.points }}</span></li> }
+          </ul>
+        }
+
+        <h3>Ce a făcut adversarul</h3>
+        <ol class="moves">
+          @for (m of t.moves; track $index) {
+            <li>
+              <span class="mono">T+{{ m.at_s }}s</span>
+              <strong>{{ moveLabel[m.move] }}{{ m.target_drone ? ' · D' + m.target_drone : '' }}</strong>
+              <span class="tag">{{ m.source === 'AI' ? 'Gemini' : 'local' }}</span>
+              <span class="why">{{ m.reason }}</span>
+            </li>
+          } @empty {
+            <li class="dim">Adversarul nu a apucat să atace.</li>
+          }
+        </ol>
+
+        <p class="source dim">
+          {{ d.source === 'AI' ? 'Feedback scris de Gemini (' + d.model + ') din rezultatele măsurate.' : 'Feedback local: Gemini nu a fost disponibil.' }}
+          Scorul e calculat din jurnalul cu lanț de hash, nu de AI.
+        </p>
+      }
+
+      <footer>
+        <button class="btn" type="button" (click)="store.closeTraining()">Închide</button>
+        <button class="btn primary" type="button" [disabled]="!t.debrief" (click)="store.startTraining()">Încă o sesiune</button>
+      </footer>
+    </section>
+  </div>
+}

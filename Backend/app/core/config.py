@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:4200",
         "http://127.0.0.1:4200",
+        "http://localhost:4201",  # dev preview (.claude/launch.json)
+        "http://127.0.0.1:4201",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "http://localhost:3000",
@@ -85,6 +87,8 @@ class Settings(BaseSettings):
     COPILOT_MODEL: str = "gemini-3.8-flash"
     # Used when the main model is overloaded or times out (Gemini 503 / 504).
     COPILOT_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
+    # AI training adversary (services/training_service.py): picks a move every ~20 s, so speed wins.
+    TRAINING_ADVERSARY_MODEL: str = "gemini-3.5-flash-lite"
     COPILOT_EFFORT: str = "low"  # thinking level: low | medium | high; low keeps chat answers quick
 
 

@@ -173,6 +173,12 @@
   }
 }
 
+.live-banner.training {
+  .live-title { color: var(--violet); }
+  .btn { margin-left: auto; }
+  em { color: var(--violet); font-style: normal; }
+}
+
 .track {
   position: relative;
   flex: 1;

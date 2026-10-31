@@ -41,6 +41,15 @@ class CopilotUnavailable(Exception):
     """The copilot can't answer right now (not configured, rate limited, network...)."""
 
 
+def is_blocked(response: Any) -> bool:
+    """Gemini refused the prompt or stopped the answer on safety grounds."""
+    candidate = response.candidates[0] if response.candidates else None
+    return bool(
+        (response.prompt_feedback is not None and response.prompt_feedback.block_reason)
+        or (candidate is not None and candidate.finish_reason in BLOCKED)
+    )
+
+
 def _mission_time(details: Any) -> str:
     if isinstance(details, dict) and isinstance(details.get("mission_time_s"), (int, float)):
         t = int(details["mission_time_s"])
@@ -94,6 +103,44 @@ class CopilotService:
                 raise CopilotUnavailable(NOT_CONFIGURED) from e
         return self._client
 
+    def generate(
+        self, contents: Any, config: types.GenerateContentConfig, models: Optional[List[str]] = None,
+    ) -> types.GenerateContentResponse:
+        """
+        One Gemini call, shared by the copilot and the training adversary: falls back to the
+        lighter model when the main one is overloaded, and turns failures into CopilotUnavailable.
+        """
+        if models is None:
+            models = [settings.COPILOT_MODEL]
+            if settings.COPILOT_FALLBACK_MODEL and settings.COPILOT_FALLBACK_MODEL != settings.COPILOT_MODEL:
+                models.append(settings.COPILOT_FALLBACK_MODEL)
+        try:
+            for i, model_id in enumerate(models):
+                try:
+                    return self._get_client().models.generate_content(model=model_id, contents=contents, config=config)
+                except errors.ServerError as e:
+                    # Overloaded or timed out on Google's side: the fallback model usually still answers.
+                    if i == len(models) - 1:
+                        raise
+                    logger.warning("Gemini model %s unavailable (%s), falling back to %s", model_id, e.code, models[i + 1])
+        except errors.ClientError as e:
+            msg = e.message or ""
+            if "API key" in msg:
+                raise CopilotUnavailable(NOT_CONFIGURED) from e
+            if e.code in (401, 403):
+                raise CopilotUnavailable("The configured API key can't use this model.") from e
+            if e.code == 429:
+                raise CopilotUnavailable("Copilot is rate limited, try again in a moment.") from e
+            if e.code == 404:
+                raise CopilotUnavailable(f"Gemini model '{settings.COPILOT_MODEL}' not found: check COPILOT_MODEL.") from e
+            logger.error("Copilot request rejected: %s", msg)
+            raise CopilotUnavailable(f"Copilot request rejected: {msg}") from e
+        except errors.APIError as e:
+            raise CopilotUnavailable(f"Gemini API error ({e.code}), try again.") from e
+        except httpx.TransportError as e:
+            raise CopilotUnavailable("Can't reach the Gemini API (no internet?).") from e
+        raise CopilotUnavailable("No Gemini model configured.")  # unreachable: models is never empty
+
     def ask(
         self,
         question: str,
@@ -125,50 +172,15 @@ class CopilotService:
         ]
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
-        config = types.GenerateContentConfig(
+        response = self.generate(contents, types.GenerateContentConfig(
             system_instruction=[SYSTEM_PROMPT, context],
             max_output_tokens=16000,
             thinking_config=types.ThinkingConfig(
                 thinking_level=THINKING_LEVEL.get(settings.COPILOT_EFFORT, types.ThinkingLevel.LOW)
             ),
-        )
-        models = [settings.COPILOT_MODEL]
-        if settings.COPILOT_FALLBACK_MODEL and settings.COPILOT_FALLBACK_MODEL != settings.COPILOT_MODEL:
-            models.append(settings.COPILOT_FALLBACK_MODEL)
-
-        try:
-            for i, model_id in enumerate(models):
-                try:
-                    response = self._get_client().models.generate_content(model=model_id, contents=contents, config=config)
-                    break
-                except errors.ServerError as e:
-                    # Overloaded or timed out on Google's side: the fallback model usually still answers.
-                    if i == len(models) - 1:
-                        raise
-                    logger.warning("Copilot model %s unavailable (%s), falling back to %s", model_id, e.code, models[i + 1])
-        except errors.ClientError as e:
-            msg = e.message or ""
-            if "API key" in msg:
-                raise CopilotUnavailable(NOT_CONFIGURED) from e
-            if e.code in (401, 403):
-                raise CopilotUnavailable("The configured API key can't use this model.") from e
-            if e.code == 429:
-                raise CopilotUnavailable("Copilot is rate limited, try again in a moment.") from e
-            if e.code == 404:
-                raise CopilotUnavailable(f"Gemini model '{settings.COPILOT_MODEL}' not found: check COPILOT_MODEL.") from e
-            logger.error("Copilot request rejected: %s", msg)
-            raise CopilotUnavailable(f"Copilot request rejected: {msg}") from e
-        except errors.APIError as e:
-            raise CopilotUnavailable(f"Gemini API error ({e.code}), try again.") from e
-        except httpx.TransportError as e:
-            raise CopilotUnavailable("Can't reach the Gemini API (no internet?).") from e
-
+        ))
         model = response.model_version or settings.COPILOT_MODEL
-        candidate = response.candidates[0] if response.candidates else None
-        blocked = (response.prompt_feedback is not None and response.prompt_feedback.block_reason) or (
-            candidate is not None and candidate.finish_reason in BLOCKED
-        )
-        if blocked:
+        if is_blocked(response):
             return {
                 "answer": "The copilot declined to answer this question.",
                 "cited_ids": [],

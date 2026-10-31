@@ -8,6 +8,10 @@ import {
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
+import {
+  AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
+  scoreSession, seededRandom,
+} from './training';
 
 export interface Toast {
   id: number;
@@ -33,6 +37,21 @@ export type Trigger =
   | 'weather-clear';
 
 const HISTORY_LEN = 90;
+
+/** An AI training session in Demo mode (core/training.ts). */
+export interface TrainingSession {
+  phase: 'running' | 'debriefing' | 'done';
+  startedAt: number;
+  lengthS: number;
+  nextMoveAt: number;
+  requesting: boolean;
+  /** Who plays the adversary: Gemini on the backend, or the local rules once that failed. */
+  adversary: 'AI' | 'LOCAL';
+  moves: AdversaryMove[];
+  redSeconds: Record<number, number>;
+  lastElapsed: number;
+  debrief: TrainingDebrief | null;
+}
 
 /** Events worth interrupting the operator for, with how loud they are. */
 const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
@@ -92,6 +111,7 @@ export class OrionStore implements OnDestroy {
   readonly highlightedEvents = signal<number[]>([]);
   readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+  readonly training = signal<TrainingSession | null>(null);
 
   setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
     this.mapMode.set(mode);
@@ -166,6 +186,7 @@ export class OrionStore implements OnDestroy {
     this.verification.set(null);
     this.trustHistory.set({});
     this.clearCopilot();
+    this.training.set(null);
     this.lastAlertedId = 0;
     this.elapsed.set(0);
     if (mode === 'live') this.connectLive(allowFallback);
@@ -287,6 +308,126 @@ export class OrionStore implements OnDestroy {
       const worst = [...u.drones].sort((a, b) => a.trust_score - b.trust_score)[0];
       if (worst && worst.trust_status !== 'GREEN') this.selectedDroneId.set(worst.drone_id);
     }
+    if (this.training()?.phase === 'running') this.trainingTick(u);
+  }
+
+  // ---- AI training (Demo) ------------------------------------------------------------------
+
+  /** Starts a fresh Demo run where an adversary, not the fixed script, stages the attacks. */
+  async startTraining(): Promise<void> {
+    if (this.mode() !== 'offline') this.setMode('offline');
+    await this.reset();
+    if (!this.offline) return;
+    this.offline.scripted = false;
+    this.training.set({
+      phase: 'running', startedAt: this.elapsed(), lengthS: SESSION_LENGTH_S, nextMoveAt: this.elapsed() + FIRST_MOVE_AT_S,
+      requesting: false, adversary: 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
+    });
+    await this.start();
+  }
+
+  /** Ends the session now (or when time is up) and builds the debrief. */
+  async finishTraining(): Promise<void> {
+    const t = this.training();
+    if (!t || t.phase !== 'running' || !this.offline) return;
+    this.offline.stop();
+    this.running.set(false);
+    this.training.set({ ...t, phase: 'debriefing' });
+
+    const end = this.elapsed();
+    const events = this.offline.ledger.events;
+    const decisions = decisionsFromLog(events, t.startedAt, end);
+    const breaches = events.filter(e => e.event_type === 'WEATHER_LIMIT_EXCEEDED').length;
+    const { score, grade, lines } = scoreSession(decisions, t.redSeconds, breaches, end);
+    let text = localDebrief(decisions, t.redSeconds, score, grade);
+    let source: 'AI' | 'LOCAL' = 'LOCAL';
+    let model: string | undefined;
+    try {
+      const res = await this.api.trainingDebrief({
+        score, duration_s: Math.round(end - t.startedAt),
+        decisions: decisions.map(d => ({ drone_id: d.droneId, action: d.action, issued_at_s: d.issuedAt, reaction_s: d.reactionS, outcome: d.outcome })),
+        red_seconds: Object.fromEntries(Object.entries(t.redSeconds).map(([k, v]) => [k, Math.round(v)])),
+        attacks: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone, reason: m.reason })),
+        extra: { grade, deductions: lines, target_reaction_s: 15, weather_breaches: breaches },
+      });
+      text = { summary: res.summary, strengths: res.strengths, improvements: res.improvements };
+      source = 'AI';
+      model = res.model;
+    } catch { /* backend or Gemini unavailable: keep the local debrief */ }
+    const now = this.training();
+    if (now?.phase !== 'debriefing') return; // reset while waiting
+    this.training.set({ ...now, phase: 'done', debrief: { score, grade, lines, decisions, ...text, source, model } });
+  }
+
+  /** Closes the debrief and goes back to the regular scripted Demo. */
+  async closeTraining(): Promise<void> {
+    await this.reset();
+  }
+
+  private trainingTick(u: FleetUpdate): void {
+    const t = this.training()!;
+    const dt = Math.max(0, u.elapsed_time - t.lastElapsed);
+    const redSeconds = { ...t.redSeconds };
+    for (const d of u.drones) if (d.trust_status === 'RED') redSeconds[d.drone_id] = (redSeconds[d.drone_id] ?? 0) + dt;
+    this.training.set({ ...t, redSeconds, lastElapsed: u.elapsed_time });
+    if (u.elapsed_time - t.startedAt >= t.lengthS) {
+      void this.finishTraining();
+    } else if (u.elapsed_time >= t.nextMoveAt && !t.requesting) {
+      void this.adversaryTurn();
+    }
+  }
+
+  private async adversaryTurn(): Promise<void> {
+    const sim = this.offline;
+    const t = this.training();
+    if (!sim || !t) return;
+    this.training.set({ ...t, requesting: true });
+    const options = sim.adversaryOptions();
+    const now = this.elapsed();
+    const decisions = decisionsFromLog(sim.ledger.events, t.startedAt, now);
+    const resolved = decisions.filter(d => d.reactionS !== null);
+    const avgReaction = resolved.length ? resolved.reduce((a, d) => a + d.reactionS!, 0) / resolved.length : null;
+    const pending = this.pendingRecommendations().map(r => {
+      const issued = decisions.find(d => d.recId === r.id)?.issuedAt ?? now;
+      return { droneId: r.drone_id, action: r.recommended_action, waitingS: Math.round(now - issued) };
+    });
+
+    let move: AdversaryMove | null = null;
+    if (t.adversary === 'AI') {
+      try {
+        const res = await this.api.trainingMove({
+          elapsed_s: Math.round(now - t.startedAt), remaining_s: Math.round(t.lengthS - (now - t.startedAt)),
+          available: options.available, eligible: options.eligible,
+          drones: this.drones().map(d => ({ id: d.drone_id, status: d.trust_status, trust: Math.round(d.trust_score), mode: d.flight_mode })),
+          pending_decisions: pending.map(p => ({ drone_id: p.droneId, action: p.action, waiting_s: p.waitingS })),
+          operator: {
+            decisions: decisions.length, avg_reaction_s: avgReaction === null ? null : Math.round(avgReaction),
+            slowest_reaction_s: resolved.length ? Math.round(Math.max(...resolved.map(d => d.reactionS!))) : null,
+            missed: decisions.filter(d => d.reactionS === null).length,
+          },
+          history: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone })),
+        });
+        move = { move: res.move, target_drone: res.target_drone, wait_s: res.wait_s, reason: res.reason, source: 'AI' };
+      } catch {
+        this.pushToast('info', 'Adversar local', 'Gemini nu răspunde: adversarul continuă cu regulile locale.');
+      }
+    }
+    const current = this.training();
+    if (!current || current.phase !== 'running' || this.offline !== sim) return; // ended while we waited
+    const rnd = seededRandom(Math.round(now * 1000) + current.moves.length);
+    move ??= localAdversary(options, pending, current.moves, avgReaction, rnd);
+    // The AI's choice was made a few seconds ago: if it's no longer possible, play locally.
+    if (!sim.applyAdversaryMove(move.move, move.target_drone)) {
+      move = localAdversary(sim.adversaryOptions(), pending, current.moves, avgReaction, rnd);
+      sim.applyAdversaryMove(move.move, move.target_drone, 'LOCAL_ADVERSARY');
+    }
+    this.training.set({
+      ...current,
+      requesting: false,
+      adversary: move.source === 'AI' ? 'AI' : 'LOCAL',
+      moves: [...current.moves, { ...move, at_s: Math.round(this.elapsed() - current.startedAt) }],
+      nextMoveAt: this.elapsed() + move.wait_s,
+    });
   }
 
   private setEvents(events: AuditEvent[]): void {
@@ -339,7 +480,9 @@ export class OrionStore implements OnDestroy {
     this.toasts.set([]);
     this.clearCopilot();
     this.lastAlertedId = 0;
+    this.training.set(null);
     if (this.offline) {
+      this.offline.scripted = true;
       this.offline.reset();
       this.running.set(false);
     } else {

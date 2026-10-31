@@ -24,6 +24,13 @@ export class CommandBar {
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   });
 
+  protected trainingRemaining = computed(() => {
+    const t = this.store.training();
+    if (!t) return '';
+    const left = Math.max(0, Math.ceil(t.lengthS - (this.store.elapsed() - t.startedAt)));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  });
+
   protected progress = computed(() => Math.min(100, (this.store.elapsed() / DEMO_LENGTH_S) * 100));
 
   protected stepPos(at: number): number {

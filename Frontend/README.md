@@ -3,6 +3,7 @@
 ORION Ground Control UI (Angular 20 + MapLibre GL).
 
 - **Operations** (`/`): theatre map with zones, drones, uncertainty circles and blocked/safe egress paths; per-drone trust scores (GPS, INS, link, peer consensus); the "what is safe now" action matrix with operator approval; the hash-chained after-action log.
+- **AI training** (Demo): 3-minute session where an adversary (Gemini via the backend, or local rules offline) stages attacks; at the end a scored debrief measured from the hash-chained log (`core/training.ts`).
 - **Ask ORION** (next to the log): read-only copilot. Answers come only from the hash-chained log and cite records as clickable `#id` links that highlight the row. Needs the backend running with `GEMINI_API_KEY` (see Backend/README.md); in Offline mode the browser sends its own ledger.
 - **Report** (`/report`): post-action report with chain verification, attacks, decisions and full timeline. Export as JSON or print to PDF.
 
