@@ -19,6 +19,9 @@ class DirectDroneCommand(BaseModel):
     action: str
     operator_id: str = "OPERATOR_1"
     notes: Optional[str] = None
+    target_zone_id: Optional[int] = None
+    target_point: Optional[List[float]] = None
+    path_type: Optional[str] = "SAFE" 
 
 
 @router.get("/recommendations", response_model=List[RecommendationResponse])
@@ -112,7 +115,13 @@ def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_d
         operator_id=payload.operator_id
     )
 
-    simulator.execute_drone_action(drone_id=payload.drone_id, action=payload.action)
+    simulator.execute_drone_action(
+        drone_id=payload.drone_id,
+        action=payload.action,
+        target_zone_id=payload.target_zone_id,
+        target_point=payload.target_point,
+        path_type=payload.path_type or "SAFE"
+    )
 
     return {
         "status": "COMMAND_SENT",

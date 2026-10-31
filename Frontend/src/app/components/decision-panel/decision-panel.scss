@@ -286,14 +286,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 6px 3px;
+  gap: 4px;
+  padding: 5px 2px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
   background: var(--panel-2);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
   transition: all 0.15s ease;
 
   &.status-YELLOW { --status: var(--yellow); }
@@ -458,5 +461,360 @@
     max-width: 260px;
     margin: 0 0 14px;
     line-height: 1.45;
+  }
+}
+
+
+/* --- Path Risk Profile & Tactical Operations --- */
+.path-risk-box {
+  margin: 10px 0 12px;
+  padding: 8px 10px;
+  background: rgba(14, 21, 29, 0.7);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+
+  .risk-head {
+    margin-bottom: 6px;
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+  }
+
+  .risk-options {
+    display: flex;
+    gap: 6px;
+
+    .risk-btn {
+      flex: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 5px 8px;
+      font-size: 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      .symbol {
+        font-size: 12px;
+      }
+
+      &.safe.on {
+        background: rgba(61, 220, 132, 0.15);
+        border-color: var(--green);
+        color: var(--green);
+        font-weight: 600;
+      }
+
+      &.risky.on {
+        background: rgba(255, 159, 67, 0.18);
+        border-color: #ff9f43;
+        color: #ff9f43;
+        font-weight: 600;
+      }
+    }
+  }
+}
+
+.tactical-card {
+  margin-bottom: 14px;
+  padding: 10px;
+  background: rgba(17, 24, 39, 0.65);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  .tac-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    &:not(:last-child) {
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  }
+
+  .tac-title {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    strong {
+      color: var(--text-bright);
+      font-size: 12px;
+    }
+
+    .tac-desc {
+      color: var(--text-dim);
+      font-size: 10.5px;
+    }
+  }
+
+  .tac-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .tac-select {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    font-size: 11px;
+    background: #0d141c;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    color: var(--text);
+    outline: none;
+
+    &:focus {
+      border-color: var(--accent);
+    }
+  }
+
+  .tac-btn {
+    border: 1px solid var(--accent);
+    background: rgba(0, 212, 255, 0.15);
+    color: var(--accent);
+    white-space: nowrap;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+
+    &:hover:not(:disabled) {
+      background: var(--accent);
+      color: #0b0f14;
+    }
+  }
+
+  .tac-coord-display {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    background: #0d141c;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+
+    .coords {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+
+      &.dim {
+        color: var(--text-dim);
+        font-style: italic;
+      }
+    }
+  }
+
+  .pick-btn {
+    white-space: nowrap;
+    padding: 4px 8px;
+    font-size: 11px;
+
+    &.active {
+      background: rgba(0, 212, 255, 0.2);
+      border-color: #00d4ff;
+      color: #00d4ff;
+    }
+  }
+}
+
+.matrix-heading {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+
+/* --- Command Scope Switcher --- */
+.command-scope-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  background: rgba(14, 21, 29, 0.7);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+
+  .scope-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    .scope-icon {
+      font-size: 12px;
+    }
+
+    .scope-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--yellow);
+      color: #0b0f14;
+      font-size: 10px;
+      font-weight: 700;
+      margin-left: 2px;
+    }
+
+    &:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    &.active {
+      background: var(--accent);
+      color: #0b0f14;
+      font-weight: 700;
+
+      .scope-badge {
+        background: #0b0f14;
+        color: var(--yellow);
+      }
+    }
+  }
+}
+
+/* --- Patrol Zone Picker --- */
+.picker-zones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+
+  .pick-zone {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-strong);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #00d4ff;
+
+      &.warn {
+        background: var(--red);
+        box-shadow: 0 0 6px var(--red);
+      }
+    }
+
+    .count {
+      font-size: 10.5px;
+      color: var(--text-dim);
+    }
+
+    &:hover {
+      border-color: #3b5168;
+    }
+
+    &.on {
+      border-color: #00d4ff;
+      background: rgba(0, 212, 255, 0.12);
+      box-shadow: 0 0 0 1px #00d4ff;
+    }
+
+    &.jammed {
+      border-color: rgba(255, 84, 99, 0.6);
+    }
+  }
+}
+
+/* --- Zone Overview Card --- */
+.zone-overview-card {
+  padding: 10px;
+  background: rgba(14, 21, 29, 0.7);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+
+  &.has-hazard {
+    border-color: rgba(255, 84, 99, 0.45);
+    background: rgba(255, 84, 99, 0.06);
+  }
+
+  .overview-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+
+    .title-col {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      strong {
+        font-size: 12.5px;
+        color: var(--text);
+      }
+
+      .dim {
+        font-size: 10.5px;
+        color: var(--text-dim);
+      }
+    }
+  }
+
+  .hazard-desc {
+    margin: 8px 0 0;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(255, 84, 99, 0.3);
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--red);
+  }
+}
+
+/* --- Tactics Matrix --- */
+.tactics-matrix {
+  li {
+    .icon {
+      font-size: 13px;
+    }
+
+    &.recommended {
+      border-color: rgba(0, 212, 255, 0.5);
+      background: rgba(0, 212, 255, 0.06);
+    }
   }
 }

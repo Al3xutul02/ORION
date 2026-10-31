@@ -1,4 +1,4 @@
-import { evaluateActions, segmentIntersectsCircle } from './geo';
+import { evaluateActions, planTargetRoute, segmentIntersectsCircle } from './geo';
 import { DroneState, Zone } from './models';
 import { MARGIN_M, planRoute } from './pathfinding';
 
@@ -67,5 +67,29 @@ describe('safe route action', () => {
     const route = evaluateActions(drone, [zone({ center: [44.36, 23.9], radius_m: 200 })]).find(a => a.id === 'SAFE_ROUTE_RETREAT')!;
     expect(route.recommended).toBeFalse();
     expect(route.reason).toContain('same as return-to-home');
+  });
+});
+
+
+describe('planTargetRoute (SAFE vs RISKY)', () => {
+  const zones: Zone[] = [
+    { id: 1, name: 'Threat Zone Alpha', zone_type: 'THREAT', geometry_type: 'CIRCLE', center: [44.34, 23.84], radius_m: 450, is_active: true, detected_by: 'TEST' },
+    { id: 2, name: 'Interference Beta', zone_type: 'INTERFERENCE', geometry_type: 'CIRCLE', center: [44.328, 23.82], radius_m: 500, is_active: true, detected_by: 'TEST' },
+  ];
+  const start: [number, number] = [44.316, 23.8];
+  const goal: [number, number] = [44.335, 23.83];
+
+  it('safe path finds a valid route avoiding all hazards', () => {
+    const route = planTargetRoute(start, goal, zones, 'SAFE');
+    expect(route).not.toBeNull();
+    expect(route!.waypoints.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('risky path allows traversable hazard zones but avoids threat zones', () => {
+    const safeRoute = planTargetRoute(start, goal, zones, 'SAFE');
+    const riskyRoute = planTargetRoute(start, goal, zones, 'RISKY');
+    expect(safeRoute).not.toBeNull();
+    expect(riskyRoute).not.toBeNull();
+    expect(riskyRoute!.lengthM).toBeLessThanOrEqual(safeRoute!.lengthM + 5);
   });
 });

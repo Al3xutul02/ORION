@@ -178,6 +178,7 @@ class OrionFleetSimulator:
             "rssi": rssi,
             "noise": 15.0,
             "flight_mode": flight_mode,
+            "patrol_zone_id": d_data.get("patrol_zone_id", 100),
             "is_armed": mode != "LANDED"
         }
 
@@ -290,7 +291,7 @@ class OrionFleetSimulator:
             reason=rec.get("reason")
         )
 
-    def execute_drone_action(self, drone_id: int, action: str):
+    def execute_drone_action(self, drone_id: int, action: str, target_zone_id: Optional[int] = None, target_point: Optional[List[float]] = None, path_type: str = "SAFE"):
         """Transitions a drone's flight state when the operator approves a recommendation or commands a drone."""
         if drone_id not in self.drones:
             return
@@ -329,10 +330,72 @@ class OrionFleetSimulator:
                 d["mode"] = "LOITER"
                 d["loiter_until"] = float("inf")
                 d["egress_waypoints"] = []
+        elif action == "JOIN_PATROL":
+            zid = target_zone_id or d.get("patrol_zone_id", 100)
+            p_zone = theatre_rules.get_zone(zid)
+            if not p_zone:
+                pzs = theatre_rules.active_patrol_zones()
+                p_zone = pzs[0] if pzs else None
+            if p_zone:
+                c_lat, c_lon = p_zone["center"]
+                r_m = p_zone["radius_m"]
+                ang = math.atan2(d["lat"] - c_lat, d["lon"] - c_lon)
+                r_lat = r_m / 111139.0
+                r_lon = r_m / (111139.0 * math.cos(math.radians(c_lat)))
+                entry_lat = c_lat + r_lat * math.sin(ang)
+                entry_lon = c_lon + r_lon * math.cos(ang)
+                rep_lat, rep_lon = self._reported_position(d)
+                route = theatre_rules.plan_target_route((rep_lat, rep_lon), (entry_lat, entry_lon), path_type=path_type)
+                d["mode"] = "ROUTE"
+                d["target_mode"] = "PATROL"
+                d["target_zone_id"] = p_zone["id"]
+                d["patrol_zone_id"] = p_zone["id"]
+                d["path_type"] = path_type
+                if route and len(route["waypoints"]) > 1:
+                    d["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+                else:
+                    d["egress_waypoints"] = [[entry_lat, entry_lon]]
+                d["offset_angle"] = ang
+
+        elif action == "LOITER_AT":
+            t_pt = target_point if target_point and len(target_point) == 2 else [d["lat"], d["lon"]]
+            rep_lat, rep_lon = self._reported_position(d)
+            route = theatre_rules.plan_target_route((rep_lat, rep_lon), (t_pt[0], t_pt[1]), path_type=path_type)
+            d["mode"] = "ROUTE"
+            d["target_mode"] = "LOITER"
+            d["target_point"] = [float(t_pt[0]), float(t_pt[1])]
+            d["path_type"] = path_type
+            if route and len(route["waypoints"]) > 1:
+                d["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d["egress_waypoints"] = [[float(t_pt[0]), float(t_pt[1])]]
+
+        elif action in ("SECTOR_ORBIT_SHIFT", "TIGHT_MESH", "WIDE_RECON", "RESYNC_EQUIDISTANT", "EGRESS_CORRIDOR"):
+            zid = target_zone_id or d.get("patrol_zone_id", 100)
+            theatre_rules.apply_patrol_tactic(zid, action)
+            for did, dr in self.drones.items():
+                if dr.get("patrol_zone_id") == zid:
+                    dr["jammed"] = False
+                    dr["spoofed"] = False
+                    if action == "EGRESS_CORRIDOR":
+                        dr["mode"] = "CORRIDOR"
+                        best_corr, _ = theatre_rules.find_best_corridor(dr["lat"], dr["lon"])
+                        corridors = theatre_rules.active_corridors()
+                        chosen = best_corr or (corridors[0] if corridors else None)
+                        dr["egress_waypoints"] = list(reversed(chosen["waypoints"])) if chosen else [[base_lat, base_lon]]
+
         elif action == "CONTINUE_PATROL":
+            pz = theatre_rules.get_zone(d.get("patrol_zone_id", 100))
+            if not pz:
+                pzs = theatre_rules.active_patrol_zones()
+                pz = pzs[0] if pzs else None
+            c_lat = pz["center"][0] if pz else self.sector_center["lat"]
+            c_lon = pz["center"][1] if pz else self.sector_center["lon"]
+            r_lat = PATROL_RADIUS_LAT if (pz and pz.get("id") == 100) else (r_m / 111139.0)
+            r_lon = PATROL_RADIUS_LON if (pz and pz.get("id") == 100) else (r_m / (111139.0 * math.cos(math.radians(c_lat))))
             d["offset_angle"] = math.atan2(
-                (d["lat"] - self.sector_center["lat"]) / 0.003,
-                (d["lon"] - self.sector_center["lon"]) / 0.004
+                (d["lat"] - c_lat) / r_lat,
+                (d["lon"] - c_lon) / r_lon
             )
             d["mode"] = "PATROL"
             d["spoofed"] = False
@@ -340,6 +403,7 @@ class OrionFleetSimulator:
             d["spoof_offset"] = (0.0, 0.0)
             d["safe_airspace_time"] = 0.0
             d["egress_waypoints"] = []
+            d["target_mode"] = None
             trust_evaluator.drone_history.pop(drone_id, None)
 
     # -----------------------------------------------------------------
@@ -433,7 +497,7 @@ class OrionFleetSimulator:
                 "description": f"New verified safe egress corridor opened: {new_corr['name']}",
                 "mission_time_s": self.elapsed_time
             },
-            operator_id="ORION_THEATRE_INTEL"
+            operator_id="THEATRE_INTEL"
         )
         # Re-evaluate any degraded drones so they can use the newly opened corridor
         for d_id, d in self.drones.items():
@@ -457,7 +521,7 @@ class OrionFleetSimulator:
                 "description": f"{removed['name']} is no longer safe due to hostile activity and has been closed.",
                 "mission_time_s": self.elapsed_time
             },
-            operator_id="ORION_THEATRE_INTEL"
+            operator_id="THEATRE_INTEL"
         )
         # Update recommendations for any degraded drones
         for d_id, d in self.drones.items():
@@ -549,6 +613,56 @@ class OrionFleetSimulator:
             )
         return {"event": "WEATHER_CLEARED", "zone": zone}
 
+    def _check_patrol_zone_hazards(self, db):
+        """Monitors active patrol zones for intersecting EW jammers and issues fallback tactic recommendation."""
+        for pz in theatre_rules.active_patrol_zones():
+            if pz.get("shifted"):
+                continue
+            for j in theatre_rules.active_danger_zones():
+                if j.get("zone_type") == "INTERFERENCE" and j.get("geometry_type") == "CIRCLE":
+                    d_m = haversine_distance_m(pz["center"][0], pz["center"][1], j["center"][0], j["center"][1])
+                    if d_m < (pz["radius_m"] + j["radius_m"]):
+                        assigned = [d_id for d_id, d in self.drones.items() if d.get("patrol_zone_id") == pz["id"]]
+                        lead_drone = assigned[0] if assigned else 1
+                        existing = db.query(ActionRecommendation).filter(
+                            ActionRecommendation.drone_id == lead_drone,
+                            ActionRecommendation.trigger_event == "PATROL_ZONE_JAMMED",
+                            ActionRecommendation.status == "PENDING"
+                        ).first()
+                        if not existing:
+                            rec = ActionRecommendation(
+                                drone_id=lead_drone,
+                                trigger_event="PATROL_ZONE_JAMMED",
+                                blocked_action="NOMINAL_PATROL_ORBIT",
+                                blocked_reason=f"Nominal orbit crosses {j['name']}",
+                                recommended_action="SECTOR_ORBIT_SHIFT",
+                                reason=(
+                                    f"EW Jamming Zone ({j['name']}) intersects {pz['name']}. "
+                                    "Action needed: Shift patrol orbit away from jammer boundary to clear airspace and preserve navigation link while maintaining continuous perimeter surveillance."
+                                ),
+                                recommendation_details=(
+                                    "1. Shift swarm orbit center away from EW jammer vector. "
+                                    "2. Recalibrate onboard sensors in safe airspace. "
+                                    "3. Resume equispaced perimeter sweep."
+                                ),
+                                status="PENDING"
+                            )
+                            db.add(rec)
+                            db.commit()
+                            db.refresh(rec)
+                            aar_service.log_event(
+                                db=db,
+                                event_type="PATROL_JAMMING_DETECTED",
+                                drone_id=lead_drone,
+                                details={
+                                    "patrol_zone_id": pz["id"],
+                                    "patrol_zone_name": pz["name"],
+                                    "jammer_name": j["name"],
+                                    "recommendation_id": rec.id
+                                },
+                                operator_id="ORION_THEATRE_RULES"
+                            )
+
     def _check_weather_limits(self, db, d_id: int, d_data: Dict[str, Any], zone: Optional[Dict[str, Any]]):
         """Weather beyond the platform's limits: alert once per entry and recommend leaving."""
         if not zone or not weather.is_severe(zone) or d_data["mode"] in ("LANDED", "RTL", "CORRIDOR", "ROUTE"):
@@ -578,14 +692,10 @@ class OrionFleetSimulator:
         active_weather = len(theatre_rules.active_weather_zones())
 
         weights: List[Tuple[str, float]] = [
-            ("spoofing", 1.4),
-            ("jammer", 1.1 if active_dangers < 4 else 0.4),
-            ("danger_appear", 1.3 if active_dangers < 4 else 0.2),
-            ("danger_disappear", 1.5 if active_dangers >= 3 else 0.4),
-            ("corridor_appear", 1.4 if active_corridors < 2 else 0.8),
-            ("corridor_disappear", 1.1 if active_corridors >= 2 else 0.4),
-            ("replay", 0.9),
-            ("weather_appear", 0.8 if active_weather < 2 else 0.1),
+            ("spoofing", 1.6),
+            ("jammer", 1.4 if active_dangers < 4 else 0.5),
+            ("replay", 1.1),
+            ("weather_appear", 0.9 if active_weather < 2 else 0.1),
             ("weather_clear", 0.7 if active_weather >= 1 else 0.0),
         ]
         # Avoid repeating the exact same event type twice in a row
@@ -637,27 +747,37 @@ class OrionFleetSimulator:
             self._hold_off_orbit(d_data, dt)
             return
 
-        if mode == "ROUTE" and d_data["egress_waypoints"] and self._route_leg_blocked(d_data):
-            # A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
-            route = theatre_rules.plan_safe_route(d_data["lat"], d_data["lon"])
-            if route:
-                d_data["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
-            else:
-                d_data["mode"] = "LOITER"
-                d_data["loiter_until"] = float("inf")
-                d_data["egress_waypoints"] = []
-            aar_service.log_event(
-                db=db,
-                event_type="ROUTE_REPLANNED",
-                drone_id=d_id,
-                details={
-                    "reason": "A hazard zone now crosses the planned route",
-                    "result": f"{len(route['waypoints']) - 1} legs, {route['length_m'] / 1000:.1f} km" if route else "No safe route: holding (LOITER)",
-                    "mission_time_s": self.elapsed_time
-                },
-                operator_id="ORION_PATHFINDER"
-            )
-            return
+        if mode == "ROUTE" and d_data["egress_waypoints"]:
+            path_type = d_data.get("path_type", "SAFE")
+            if self._route_leg_blocked(d_data, path_type):
+                # A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
+                t_mode = d_data.get("target_mode")
+                if t_mode == "PATROL":
+                    pz = theatre_rules.get_zone(d_data.get("target_zone_id", 100))
+                    dest = (pz["center"][0], pz["center"][1]) if pz else (self.sector_center["lat"], self.sector_center["lon"])
+                elif t_mode == "LOITER" and d_data.get("target_point"):
+                    dest = (d_data["target_point"][0], d_data["target_point"][1])
+                else:
+                    dest = (theatre_rules.home_base["lat"], theatre_rules.home_base["lon"])
+                route = theatre_rules.plan_target_route((d_data["lat"], d_data["lon"]), dest, path_type=path_type)
+                if route:
+                    d_data["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+                else:
+                    d_data["mode"] = "LOITER"
+                    d_data["loiter_until"] = float("inf")
+                    d_data["egress_waypoints"] = []
+                aar_service.log_event(
+                    db=db,
+                    event_type="ROUTE_REPLANNED",
+                    drone_id=d_id,
+                    details={
+                        "reason": "A hazard zone now crosses the planned route",
+                        "result": f"{len(route['waypoints']) - 1} legs, {route['length_m'] / 1000:.1f} km" if route else "No safe route: holding (LOITER)",
+                        "mission_time_s": self.elapsed_time
+                    },
+                    operator_id="ORION_PATHFINDER"
+                )
+                return
 
         if mode in ("CORRIDOR", "RTL", "ROUTE"):
             wps = d_data["egress_waypoints"]
@@ -679,21 +799,59 @@ class OrionFleetSimulator:
                 d_data["lon"] = target_lon
                 wps.pop(0)
                 if not wps:
-                    d_data["mode"] = "LANDED"
-                    d_data["spoofed"] = False
-                    d_data["jammed"] = False
-                    d_data["landed_until"] = self.elapsed_time + 10.0
-                    aar_service.log_event(
-                        db=db,
-                        event_type="DRONE_RECOVERED",
-                        drone_id=d_id,
-                        details={
-                            "location": "Base Forward Alpha",
-                            "via": {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress"),
-                            "mission_time_s": self.elapsed_time
-                        },
-                        operator_id="SYSTEM"
-                    )
+                    t_mode = d_data.get("target_mode")
+                    if t_mode == "PATROL":
+                        d_data["mode"] = "PATROL"
+                        d_data["patrol_zone_id"] = d_data.get("target_zone_id", 100)
+                        d_data["target_mode"] = None
+                        d_data["spoofed"] = False
+                        d_data["jammed"] = False
+                        pz = theatre_rules.get_zone(d_data["patrol_zone_id"])
+                        pz_name = pz["name"] if pz else "Patrol Zone"
+                        aar_service.log_event(
+                            db=db,
+                            event_type="DRONE_JOINED_PATROL",
+                            drone_id=d_id,
+                            details={
+                                "zone_id": d_data["patrol_zone_id"],
+                                "zone_name": pz_name,
+                                "path_type": d_data.get("path_type", "SAFE"),
+                                "mission_time_s": self.elapsed_time
+                            },
+                            operator_id="SYSTEM"
+                        )
+                    elif t_mode == "LOITER":
+                        d_data["mode"] = "LOITER"
+                        d_data["loiter_until"] = float("inf")
+                        d_data["hold_point"] = d_data.get("target_point", [d_data["lat"], d_data["lon"]])
+                        d_data["target_mode"] = None
+                        aar_service.log_event(
+                            db=db,
+                            event_type="DRONE_LOITER_HOLD",
+                            drone_id=d_id,
+                            details={
+                                "location": d_data["hold_point"],
+                                "path_type": d_data.get("path_type", "SAFE"),
+                                "mission_time_s": self.elapsed_time
+                            },
+                            operator_id="SYSTEM"
+                        )
+                    else:
+                        d_data["mode"] = "LANDED"
+                        d_data["spoofed"] = False
+                        d_data["jammed"] = False
+                        d_data["landed_until"] = self.elapsed_time + 10.0
+                        aar_service.log_event(
+                            db=db,
+                            event_type="DRONE_RECOVERED",
+                            drone_id=d_id,
+                            details={
+                                "location": "Base Forward Alpha",
+                                "via": {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress"),
+                                "mission_time_s": self.elapsed_time
+                            },
+                            operator_id="SYSTEM"
+                        )
             else:
                 d_data["lat"] += (dlat / dist_deg) * step
                 d_data["lon"] += (dlon / dist_deg) * step
@@ -704,11 +862,22 @@ class OrionFleetSimulator:
         # shifts what it reports, which is applied in _reported_position().
         d_data["alt"] = self.sector_center["alt"]
         angular_speed = PATROL_ANGULAR_SPEED
-        patrol_radius_lat = PATROL_RADIUS_LAT
-        patrol_radius_lon = PATROL_RADIUS_LON
+        pz = theatre_rules.get_zone(d_data.get("patrol_zone_id", 100))
+        if not pz:
+            pzs = theatre_rules.active_patrol_zones()
+            pz = pzs[0] if pzs else None
+        c_lat = pz["center"][0] if pz else self.sector_center["lat"]
+        c_lon = pz["center"][1] if pz else self.sector_center["lon"]
+        r_m = pz["radius_m"] if pz else 350.0
+        if pz and pz.get("id") == 100:
+            patrol_radius_lat = PATROL_RADIUS_LAT
+            patrol_radius_lon = PATROL_RADIUS_LON
+        else:
+            patrol_radius_lat = r_m / 111139.0
+            patrol_radius_lon = r_m / (111139.0 * math.cos(math.radians(c_lat)))
 
-        target_lat = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
-        target_lon = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
+        target_lat = c_lat + patrol_radius_lat * math.sin(d_data["offset_angle"])
+        target_lon = c_lon + patrol_radius_lon * math.cos(d_data["offset_angle"])
 
         dlat = target_lat - d_data["lat"]
         dlon = target_lon - d_data["lon"]
@@ -724,8 +893,8 @@ class OrionFleetSimulator:
         else:
             d_data["on_orbit"] = True
             d_data["offset_angle"] += d_data.get("patrol_rate", angular_speed) * dt
-            d_data["lat"] = self.sector_center["lat"] + patrol_radius_lat * math.sin(d_data["offset_angle"])
-            d_data["lon"] = self.sector_center["lon"] + patrol_radius_lon * math.cos(d_data["offset_angle"])
+            d_data["lat"] = c_lat + patrol_radius_lat * math.sin(d_data["offset_angle"])
+            d_data["lon"] = c_lon + patrol_radius_lon * math.cos(d_data["offset_angle"])
             d_data["heading"] = math.degrees(d_data["offset_angle"]) % 360
 
     def _hold_off_orbit(self, d_data: Dict[str, Any], dt: float):
@@ -769,10 +938,18 @@ class OrionFleetSimulator:
         return clear
 
     def _coordinate_patrol(self, db):
-        """Keeps the drones on the orbit evenly spaced; logs when one joins or leaves it."""
+        """Keeps the drones on each patrol orbit evenly spaced; logs when one joins or leaves it."""
+        zones_map: Dict[int, Dict[int, float]] = {}
+        for i, d in self.drones.items():
+            if d["mode"] == "PATROL" and d.get("on_orbit"):
+                zid = d.get("patrol_zone_id", 100)
+                zones_map.setdefault(zid, {})[i] = d["offset_angle"]
+
+        for zid, on_orbit_group in zones_map.items():
+            for i, rate in patrol.spacing_rates(on_orbit_group, PATROL_ANGULAR_SPEED).items():
+                self.drones[i]["patrol_rate"] = rate
+
         on_orbit = {i: d["offset_angle"] for i, d in self.drones.items() if d["mode"] == "PATROL" and d.get("on_orbit")}
-        for i, rate in patrol.spacing_rates(on_orbit, PATROL_ANGULAR_SPEED).items():
-            self.drones[i]["patrol_rate"] = rate
         members = frozenset(on_orbit)
         previous, self._patrol_members = self._patrol_members, members
         if members == previous:
@@ -798,11 +975,18 @@ class OrionFleetSimulator:
             operator_id="ORION_PATROL",
         )
 
-    def _route_leg_blocked(self, d_data: Dict[str, Any]) -> bool:
+    def _route_leg_blocked(self, d_data: Dict[str, Any], path_type: str = "SAFE") -> bool:
         """True when the leg the drone is flying now crosses a hazard it isn't already inside."""
         lat, lon = d_data["lat"], d_data["lon"]
         t_lat, t_lon = d_data["egress_waypoints"][0]
-        for z in theatre_rules.active_danger_zones():
+        # In RISKY mode, only THREAT zones block the leg!
+        # In SAFE mode, all blocking danger zones block the leg.
+        check_zones = (
+            [z for z in theatre_rules.active_danger_zones() if z.get("zone_type") == "THREAT"]
+            if path_type.upper() == "RISKY"
+            else theatre_rules.blocking_zones()
+        )
+        for z in check_zones:
             if z.get("geometry_type") != "CIRCLE":
                 continue
             c_lat, c_lon = z["center"]
@@ -954,6 +1138,8 @@ class OrionFleetSimulator:
                 if self.elapsed_time >= self.next_random_event_at:
                     self.next_random_event_at = self.elapsed_time + random.uniform(self.random_interval_min, self.random_interval_max)
                     self.trigger_random_event(db)
+
+                self._check_patrol_zone_hazards(db)
 
                 # -------------------------------------------------------------
                 # Drone Physics & Telemetry Generation

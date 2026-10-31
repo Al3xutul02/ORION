@@ -1,6 +1,6 @@
 import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { ORION_CONFIG } from './config';
-import { ActionOption, evaluateActions } from './geo';
+import { ActionOption, distanceM, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
   AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
@@ -90,12 +90,36 @@ export class OrionStore implements OnDestroy {
   readonly copilotBusy = signal(false);
   /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
   readonly highlightedEvents = signal<number[]>([]);
+  readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
+  readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+
+  setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
+    this.mapMode.set(mode);
+  }
+
+  setPickedLoiterPoint(point: [number, number] | null): void {
+    this.pickedLoiterPoint.set(point);
+  }
 
   readonly selectedDrone = computed(() => this.drones().find(d => d.drone_id === this.selectedDroneId()) ?? null);
   /** Drone whose details panel is open (only ever opened by the operator, never by alerts). */
   readonly detailsDroneId = signal<number | null>(null);
   readonly detailsDrone = computed(() => this.drones().find(d => d.drone_id === this.detailsDroneId()) ?? null);
   readonly pendingRecommendations = computed(() => this.recommendations().filter(r => r.status === 'PENDING'));
+  readonly activePatrolZones = computed(() => this.zones().filter(z => z.is_active && z.zone_type === 'PATROL'));
+  readonly hasJammedPatrol = computed(() => {
+    const pzs = this.activePatrolZones();
+    const jammers = this.zones().filter(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
+    for (const pz of pzs) {
+      if (!pz.center || !pz.radius_m) continue;
+      for (const j of jammers) {
+        if (distanceM(pz.center[0], pz.center[1], j.center![0], j.center![1]) < (pz.radius_m + j.radius_m!)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  });
   readonly fleetCounts = computed(() => {
     const ds = this.drones();
     return {
@@ -365,22 +389,110 @@ export class OrionStore implements OnDestroy {
   }
 
   /** Operator picks an action for a drone directly, instead of approving an ORION recommendation. */
-  async commandDrone(droneId: number, action: ActionOption['id']): Promise<void> {
-    // Re-check against the latest position and zones: the list on screen may be a tick old.
+  async commandDrone(
+    droneId: number,
+    action: string,
+    targetZoneId?: number,
+    targetPoint?: [number, number],
+    pathType: 'SAFE' | 'RISKY' = 'SAFE',
+  ): Promise<void> {
     const drone = this.drones().find(d => d.drone_id === droneId);
-    const option = drone && evaluateActions(drone, this.zones()).find(a => a.id === action);
-    if (!option?.allowed) {
-      this.pushToast('critical', 'Command blocked', option ? `${option.label}: ${option.reason}` : `Drone ${droneId} not found`);
+    if (!drone) {
+      this.pushToast('critical', 'Command blocked', `Drone ${droneId} not found`);
       return;
     }
+    let reasonText = '';
+    if (action !== 'JOIN_PATROL' && action !== 'LOITER_AT') {
+      const option = evaluateActions(drone, this.zones()).find(a => a.id === action);
+      if (!option?.allowed) {
+        this.pushToast('critical', 'Command blocked', option ? `${option.label}: ${option.reason}` : `Action not allowed`);
+        return;
+      }
+      reasonText = option.reason;
+    }
     if (this.offline) {
-      const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId);
+      const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId, targetZoneId, targetPoint, pathType);
       if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
       return;
     }
-    const res = await this.call(() => this.api.command(droneId, action, option.reason));
+    const res = await this.call(() =>
+      this.api.command(droneId, action, reasonText, targetZoneId, targetPoint, pathType),
+    );
     if (res?.signed_command) {
-      this.pushToast('ok', 'Signed command sent', `${res.signed_command.command} → Drone ${res.signed_command.drone_id} (seq ${res.signed_command.sequence})`);
+      this.pushToast(
+        'ok',
+        'Signed command sent',
+        `${res.signed_command.command} → Drone ${res.signed_command.drone_id} (seq ${res.signed_command.sequence})`,
+      );
+    }
+    this.pollLive();
+  }
+
+  async createPatrolZone(name: string, center: [number, number], radiusM: number): Promise<void> {
+    if (this.offline) {
+      this.offline.addPatrolZone(name, center, radiusM);
+      this.pushToast('ok', 'Patrol zone created', `${name} (radius ${Math.round(radiusM)} m) active`);
+      return;
+    }
+    const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM }));
+    if (res) {
+      this.pushToast('ok', 'Patrol zone created', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
+    }
+    this.pollLive();
+  }
+
+  async deleteZone(zoneId: number): Promise<void> {
+    if (this.offline) {
+      this.offline.deleteZone(zoneId);
+      this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
+      return;
+    }
+    const res = await this.call(() => this.api.deleteZone(zoneId));
+    if (res) {
+      this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
+    }
+    this.pollLive();
+  }
+
+  async createThreatZone(name: string, center: [number, number], radiusM: number): Promise<void> {
+    if (this.offline) {
+      this.offline.addThreatZone(name, center, radiusM);
+      this.pushToast('warn', 'Threat zone established', `${name} (radius ${Math.round(radiusM)} m) active`);
+      return;
+    }
+    const res = await this.call(() => this.api.createThreatZone({ name, center, radius_m: radiusM }));
+    if (res) {
+      this.pushToast('warn', 'Threat zone established', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
+    }
+    this.pollLive();
+  }
+
+  async createSafeCorridor(name: string, waypoints: [number, number][]): Promise<void> {
+    if (this.offline) {
+      this.offline.addSafeCorridor(name, waypoints);
+      this.pushToast('ok', 'Safe corridor opened', `${name} (${waypoints.length} waypoints) established`);
+      return;
+    }
+    const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints }));
+    if (res) {
+      this.pushToast('ok', 'Safe corridor opened', `${res.name} (${waypoints.length} waypoints) established`);
+    }
+    this.pollLive();
+  }
+
+  async executeZoneTactic(zoneId: number, tactic: string): Promise<void> {
+    if (this.offline) {
+      const res = this.offline.executeZoneTactic(zoneId, tactic);
+      if (res.ok) {
+        this.pushToast('ok', 'Tactic executed', res.message);
+      } else {
+        this.pushToast('warn', 'Tactic rejected', res.message);
+      }
+      return;
+    }
+    const res = await this.call(() => this.api.executeZoneTactic({ zone_id: zoneId, tactic }));
+    if (res) {
+      this.pushToast('ok', 'Tactic executed', `${tactic.replaceAll('_', ' ')} executed on Zone #${zoneId}`);
     }
     this.pollLive();
   }

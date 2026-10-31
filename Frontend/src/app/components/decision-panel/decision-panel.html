@@ -33,24 +33,47 @@
   </header>
 
   <div class="panel-body">
-    <!-- TAB 1: COMMANDS (Direct Drone Control) -->
+    <!-- TAB 1: COMMANDS (Direct Drone Control & Swarm Tactics) -->
     @if (activeTab() === 'commands') {
       <div class="tab-content commands-tab">
-        <div class="picker" role="radiogroup" aria-label="Drone to command">
-          @for (d of store.drones(); track d.drone_id) {
-            <button
-              type="button"
-              role="radio"
-              class="pick status-{{ d.trust_status }}"
-              [class.on]="store.selectedDroneId() === d.drone_id"
-              [attr.aria-checked]="store.selectedDroneId() === d.drone_id"
-              (click)="store.selectDrone(d.drone_id)"
-            >
-              <span class="dot"></span>D{{ d.drone_id }}
-              <span class="mono">{{ d.trust_score.toFixed(0) }}</span>
-            </button>
-          }
+        <div class="command-scope-toggle" role="group" aria-label="Command Scope">
+          <button
+            type="button"
+            class="scope-btn"
+            [class.active]="commandScope() === 'drone'"
+            (click)="setCommandScope('drone')"
+          >
+            <span class="scope-icon">&#9992;</span> Individual Drone
+          </button>
+          <button
+            type="button"
+            class="scope-btn"
+            [class.active]="commandScope() === 'zone'"
+            (click)="setCommandScope('zone')"
+          >
+            <span class="scope-icon">&#128737;</span> Patrol Zone Tactics
+            @if (store.hasJammedPatrol()) {
+              <span class="scope-badge warn">!</span>
+            }
+          </button>
         </div>
+
+        @if (commandScope() === 'drone') {
+          <div class="picker" role="radiogroup" aria-label="Drone to command">
+            @for (d of store.drones(); track d.drone_id) {
+              <button
+                type="button"
+                role="radio"
+                class="pick status-{{ d.trust_status }}"
+                [class.on]="store.selectedDroneId() === d.drone_id"
+                [attr.aria-checked]="store.selectedDroneId() === d.drone_id"
+                (click)="store.selectDrone(d.drone_id)"
+              >
+                <span class="dot"></span>D{{ d.drone_id }}
+                <span class="mono">{{ d.trust_score.toFixed(0) }}</span>
+              </button>
+            }
+          </div>
 
         @if (store.selectedDrone(); as d) {
           <p class="current">
@@ -62,6 +85,98 @@
             }
           </p>
 
+          <!-- Flight Path Risk Profile Selector -->
+          <div class="path-risk-box">
+            <div class="risk-head">
+              <span class="label">A* Path Profile:</span>
+            </div>
+            <div class="risk-options" role="radiogroup" aria-label="Route risk profile">
+              <button
+                type="button"
+                class="risk-btn safe"
+                [class.on]="pathType() === 'SAFE'"
+                (click)="setPathType('SAFE')"
+                title="Zero hazards: strictly bypasses interference, threat, and severe weather"
+              >
+                <span class="symbol">&#128737;</span> Safe (0 hazards)
+              </button>
+              <button
+                type="button"
+                class="risk-btn risky"
+                [class.on]="pathType() === 'RISKY'"
+                (click)="setPathType('RISKY')"
+                title="Traverses hazard zones (interference/weather); strictly avoids threat zones"
+              >
+                <span class="symbol">&#9889;</span> Risky (threats avoided)
+              </button>
+            </div>
+          </div>
+
+          <!-- Tactical Operations (Patrol & Loiter with A*) -->
+          <div class="tactical-card">
+            <div class="tac-section">
+              <div class="tac-title">
+                <strong>Join Patrol Zone</strong>
+                <span class="tac-desc">A* optimal route to zone orbit</span>
+              </div>
+              <div class="tac-row">
+                <select
+                  class="tac-select"
+                  (change)="setPatrolZone(+$any($event.target).value)"
+                  [disabled]="!patrolZones().length || !canCommand() || d.source === 'MAVLINK'"
+                >
+                  @for (pz of patrolZones(); track pz.id) {
+                    <option [value]="pz.id" [selected]="(selectedPatrolZoneId() ?? patrolZones()[0]?.id) === pz.id">
+                      {{ pz.name }} (r: {{ pz.radius_m }}m)
+                    </option>
+                  }
+                </select>
+                <button
+                  type="button"
+                  class="btn sm tac-btn"
+                  [disabled]="!patrolZones().length || !canCommand() || d.source === 'MAVLINK'"
+                  (click)="joinPatrol(d.drone_id)"
+                >
+                  Join Zone
+                </button>
+              </div>
+            </div>
+
+            <div class="tac-section">
+              <div class="tac-title">
+                <strong>Go to Area &amp; Loiter</strong>
+                <span class="tac-desc">Flies A* route to target point</span>
+              </div>
+              <div class="tac-row">
+                <div class="tac-coord-display">
+                  @if (pickedLoiterPoint(); as pt) {
+                    <span class="coords mono">{{ pt[0].toFixed(4) }}, {{ pt[1].toFixed(4) }}</span>
+                  } @else {
+                    <span class="coords dim">No point selected</span>
+                  }
+                </div>
+                <button
+                  type="button"
+                  class="btn sm ghost pick-btn"
+                  [class.active]="store.mapMode() === 'pick_loiter'"
+                  (click)="pickLoiter()"
+                  title="Click on the map to set loiter destination"
+                >
+                  &#9678; Pick Map
+                </button>
+                <button
+                  type="button"
+                  class="btn sm tac-btn"
+                  [disabled]="!canCommand() || d.source === 'MAVLINK'"
+                  (click)="sendLoiter(d.drone_id)"
+                >
+                  Send Loiter
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <h4 class="matrix-heading">Direct Tactical Directives</h4>
           <ul class="matrix">
             @for (a of actions(); track a.id) {
               <li [class.allowed]="a.allowed" [class.recommended]="a.recommended" [class.active]="a.active">
@@ -116,6 +231,142 @@
             }
           </p>
         }
+        } @else if (commandScope() === 'zone') {
+          <!-- PATROL ZONE SWARM TACTICS -->
+          <div class="picker-zones" role="radiogroup" aria-label="Patrol Zone to command">
+            @for (pz of patrolZones(); track pz.id) {
+              <button
+                type="button"
+                role="radio"
+                class="pick-zone"
+                [class.on]="(activeZoneId() ?? patrolZones()[0]?.id) === pz.id"
+                [class.jammed]="isZoneJammed(pz.id)"
+                (click)="selectZone(pz.id)"
+              >
+                <span class="dot" [class.warn]="isZoneJammed(pz.id)"></span>
+                <span class="name">{{ pz.name }}</span>
+                <span class="mono count">({{ zoneDrones(pz.id).length }}d)</span>
+              </button>
+            } @empty {
+              <p class="empty">No active patrol zones. Use "+ Patrol Zone" on map toolbar to create one.</p>
+            }
+          </div>
+
+          @if (activeZone(); as pz) {
+            <div class="zone-overview-card" [class.has-hazard]="isZoneJammed(pz.id)">
+              <div class="overview-head">
+                <div class="title-col">
+                  <strong>{{ pz.name }}</strong>
+                  <span class="dim">Radius: {{ pz.radius_m }}m &middot; {{ zoneDrones(pz.id).length }} active drones</span>
+                </div>
+                <div class="badge-col">
+                  @if (isZoneJammed(pz.id)) {
+                    <span class="chip red"><span class="dot"></span>EW Jamming Active</span>
+                  } @else {
+                    <span class="chip green"><span class="dot"></span>Airspace Nominal</span>
+                  }
+                </div>
+              </div>
+              @if (isZoneJammed(pz.id)) {
+                <p class="hazard-desc">
+                  ⚠️ Active electronic warfare jamming enters this patrol sector. Sector Orbit Shift fallback recommended to maintain swarm communications.
+                </p>
+              }
+            </div>
+
+            <h4 class="matrix-heading">Swarm Tactical Directives</h4>
+            <ul class="matrix tactics-matrix">
+              <!-- 1. Sector Orbit Shift -->
+              <li [class.recommended]="isZoneJammed(pz.id)">
+                <span class="icon" aria-hidden="true">&#9889;</span>
+                <div class="what">
+                  <strong>Sector Orbit Shift (Jammer Fallback)</strong>
+                  <span>Displaces swarm orbit away from active EW jammer boundary to clear airspace while maintaining perimeter coverage.</span>
+                  @if (isZoneJammed(pz.id)) {
+                    <span class="chip accent">Recommended Fallback</span>
+                  }
+                </div>
+                <div class="do">
+                  @if (executingTactic() === 'SECTOR_ORBIT_SHIFT') {
+                    <button class="btn sm approve" type="button" (click)="executeTactic(pz.id, 'SECTOR_ORBIT_SHIFT')">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('SECTOR_ORBIT_SHIFT')">Execute</button>
+                  }
+                </div>
+              </li>
+
+              <!-- 2. Tight Mesh Formation -->
+              <li>
+                <span class="icon" aria-hidden="true">&#128279;</span>
+                <div class="what">
+                  <strong>Tight Mesh Formation (Anti-Spoofing)</strong>
+                  <span>Contracts orbit radius (-40%) and clusters swarm closely to maximize P2P mesh signal strength and mutual cross-verification.</span>
+                </div>
+                <div class="do">
+                  @if (executingTactic() === 'TIGHT_MESH') {
+                    <button class="btn sm approve" type="button" (click)="executeTactic(pz.id, 'TIGHT_MESH')">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('TIGHT_MESH')">Execute</button>
+                  }
+                </div>
+              </li>
+
+              <!-- 3. Dispersed Wide Sweep -->
+              <li>
+                <span class="icon" aria-hidden="true">&#128225;</span>
+                <div class="what">
+                  <strong>Dispersed Wide Recon (Perimeter Sweep)</strong>
+                  <span>Expands orbit radius (+45%) to maximize sensor sweep coverage across the outer boundary.</span>
+                </div>
+                <div class="do">
+                  @if (executingTactic() === 'WIDE_RECON') {
+                    <button class="btn sm approve" type="button" (click)="executeTactic(pz.id, 'WIDE_RECON')">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('WIDE_RECON')">Execute</button>
+                  }
+                </div>
+              </li>
+
+              <!-- 4. Egress via Safe Corridor -->
+              <li>
+                <span class="icon" aria-hidden="true">&#128682;</span>
+                <div class="what">
+                  <strong>Egress via Safe Corridor (Zone Evacuation)</strong>
+                  <span>Commands all drones in the zone to break orbit immediately and retreat through the nearest safe corridor.</span>
+                </div>
+                <div class="do">
+                  @if (executingTactic() === 'EGRESS_CORRIDOR') {
+                    <button class="btn sm approve danger" type="button" (click)="executeTactic(pz.id, 'EGRESS_CORRIDOR')">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('EGRESS_CORRIDOR')">Execute</button>
+                  }
+                </div>
+              </li>
+
+              <!-- 5. Equidistant Phase Resynchronization -->
+              <li>
+                <span class="icon" aria-hidden="true">&#9878;</span>
+                <div class="what">
+                  <strong>Equidistant Phase Resynchronization</strong>
+                  <span>Re-balances drone phases evenly along the orbit (360° / N) for symmetric patrol coverage.</span>
+                </div>
+                <div class="do">
+                  @if (executingTactic() === 'RESYNC_EQUIDISTANT') {
+                    <button class="btn sm approve" type="button" (click)="executeTactic(pz.id, 'RESYNC_EQUIDISTANT')">Confirm</button>
+                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
+                  } @else {
+                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('RESYNC_EQUIDISTANT')">Execute</button>
+                  }
+                </div>
+              </li>
+            </ul>
+            <p class="note">Swarm maneuvers coordinate all drones assigned to this patrol zone synchronously.</p>
+          }
+        }
       </div>
     }
 
@@ -127,7 +378,7 @@
             <article class="rec">
               <div class="rec-head">
                 <div class="rec-identity">
-                  <strong class="rec-drone">Drone {{ rec.drone_id }}</strong>
+                  <strong class="rec-drone">{{ (rec.trigger_event === "PATROL_ZONE_JAMMED" ? (zoneName(rec.drone_id) ?? "Patrol Zone Alpha") : ("Drone " + rec.drone_id)) }}</strong>
                   <span class="chip-event {{ eventLevel(rec.trigger_event) }}">{{ eventLabel(rec.trigger_event) }}</span>
                 </div>
                 <span class="rec-meta mono">#{{ rec.id }} &middot; {{ rec.timestamp | date: 'HH:mm:ss' }}</span>

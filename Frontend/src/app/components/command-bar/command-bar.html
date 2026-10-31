@@ -144,10 +144,6 @@
       </div>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
-      <button class="btn sm" type="button" (click)="store.trigger('corridor-appear')" [disabled]="store.busy()" title="Establish a new safe evacuation corridor">+ Safe corridor</button>
-      <button class="btn sm" type="button" (click)="store.trigger('corridor-disappear')" [disabled]="store.busy()" title="Compromise an existing safe corridor">- Safe corridor</button>
-      <button class="btn sm" type="button" (click)="store.trigger('danger-appear')" [disabled]="store.busy()" title="Spawn a new enemy danger zone in the theatre">+ Danger zone</button>
-      <button class="btn sm" type="button" (click)="store.trigger('danger-disappear')" [disabled]="store.busy()" title="Neutralize/clear an active danger zone">- Danger zone</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>
       <span class="hint">Weather:</span>
       <button class="btn sm" type="button" (click)="store.trigger('weather-storm')" [disabled]="store.busy()" title="Storm cell: wind above the drones' limit, heavy rain">Storm</button>

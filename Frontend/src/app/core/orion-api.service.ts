@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ORION_CONFIG } from './config';
-import { AuditEvent, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
+import { AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
 
 export type SimulationAction =
   | 'start'
@@ -55,15 +55,45 @@ export class OrionApi {
     );
   }
 
-  command(droneId: number, action: string, notes?: string) {
+  command(
+    droneId: number,
+    action: string,
+    notes?: string,
+    targetZoneId?: number,
+    targetPoint?: [number, number],
+    pathType: 'SAFE' | 'RISKY' = 'SAFE',
+  ) {
     return firstValueFrom(
       this.http.post<DecisionResult>(`${this.base}/actions/command`, {
         drone_id: droneId,
         action,
         operator_id: ORION_CONFIG.operatorId,
         notes,
+        target_zone_id: targetZoneId,
+        target_point: targetPoint,
+        path_type: pathType,
       }),
     );
+  }
+
+  createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number }) {
+    return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/patrol`, body));
+  }
+
+  createThreatZone(body: { name?: string; center: [number, number]; radius_m: number }) {
+    return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/threat`, body));
+  }
+
+  createSafeCorridor(body: { name?: string; waypoints: [number, number][] }) {
+    return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/corridor`, body));
+  }
+
+  executeZoneTactic(body: { zone_id: number; tactic: string }) {
+    return firstValueFrom(this.http.post<{ status: string; zone_id: number; tactic: string }>(`${this.base}/zones/tactic`, body));
+  }
+
+  deleteZone(zoneId: number) {
+    return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`));
   }
 
   setRandomInterval(min_s: number, max_s: number) {

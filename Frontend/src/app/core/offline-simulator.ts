@@ -59,6 +59,7 @@ const INITIAL_ZONES: Zone[] = [
   },
   { id: 3, name: 'EW Jamming Zone Sector 4', zone_type: 'INTERFERENCE', geometry_type: 'CIRCLE', center: [44.328, 23.82], radius_m: 600, is_active: true, detected_by: 'PRECONFIGURED' },
   { id: 4, name: 'Restricted Threat Zone Bravo', zone_type: 'THREAT', geometry_type: 'CIRCLE', center: [44.34, 23.84], radius_m: 500, is_active: true, detected_by: 'PRECONFIGURED' },
+  { id: 10, name: 'Patrol Zone Alpha', zone_type: 'PATROL', geometry_type: 'CIRCLE', center: [44.335, 23.83], radius_m: 350, is_active: true, detected_by: 'PRECONFIGURED' },
 ];
 
 interface SimDrone {
@@ -72,6 +73,9 @@ interface SimDrone {
   linkLostAt: number | null;
   failsafeDone: boolean;
   safeAirspaceTime: number;
+  patrol_zone_id?: number;
+  targetMode?: 'PATROL' | 'LOITER';
+  targetPoint?: [number, number];
   mode: 'PATROL' | 'LOITER' | 'EGRESS' | 'LANDED';
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
@@ -181,6 +185,7 @@ export class OfflineSimulator {
     this.moveJammer(dt);
     this.driftWeather(dt);
     this.coordinatePatrol();
+    this.checkPatrolJamming();
     for (const d of this.drones) {
       this.move(d, dt);
       this.updateRecalibration(d, dt);
@@ -196,6 +201,149 @@ export class OfflineSimulator {
   private nextWeatherId = 200;
 
   /** Brings a weather cell into the theatre (only from the buttons; the scripted timeline has none). */
+  addPatrolZone(name: string, center: [number, number], radiusM: number): Zone {
+    const zone: Zone = {
+      id: 200 + this.zones.length,
+      name: name || `Patrol Zone ${this.zones.length + 1}`,
+      zone_type: 'PATROL',
+      geometry_type: 'CIRCLE',
+      center: [...center],
+      radius_m: radiusM,
+      is_active: true,
+      detected_by: 'OPERATOR',
+    };
+    this.zones = [...this.zones, zone];
+    this.log('PATROL_ZONE_CREATED', null, { zone_id: zone.id, name: zone.name, center, radius_m: radiusM }, 'OPERATOR_1');
+    return zone;
+  }
+
+  addThreatZone(name: string, center: [number, number], radiusM: number): Zone {
+    const count = this.zones.filter(z => z.zone_type === 'THREAT' && z.is_active).length;
+    const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
+    const label = greek[count] ?? `Sector-${count + 1}`;
+    const zone: Zone = {
+      id: 300 + this.zones.length,
+      name: name || `Restricted Threat Zone ${label}`,
+      zone_type: 'THREAT',
+      geometry_type: 'CIRCLE',
+      center: [...center],
+      radius_m: radiusM,
+      is_active: true,
+      detected_by: 'OPERATOR',
+    };
+    this.zones = [...this.zones, zone];
+    this.log('THREAT_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, center, radius_m: radiusM }, 'OPERATOR_1');
+    return zone;
+  }
+
+  addSafeCorridor(name: string, waypoints: [number, number][]): Zone {
+    const count = this.zones.filter(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active).length;
+    const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
+    const label = greek[count] ?? `Route-${count + 1}`;
+    const zone: Zone = {
+      id: 400 + this.zones.length,
+      name: name || `Safe Corridor ${label}`,
+      zone_type: 'SAFE_CORRIDOR',
+      geometry_type: 'POLYGON',
+      waypoints: waypoints.map(pt => [pt[0], pt[1]]),
+      is_active: true,
+      detected_by: 'OPERATOR',
+    };
+    this.zones = [...this.zones, zone];
+    this.log('SAFE_CORRIDOR_DECLARED', null, { corridor_id: zone.id, name: zone.name, waypoints: zone.waypoints }, 'OPERATOR_1');
+    return zone;
+  }
+
+  executeZoneTactic(zoneId: number, tactic: string, operatorId = 'OPERATOR_1'): { ok: boolean; message: string } {
+    const pz = this.zones.find(z => z.id === zoneId && z.zone_type === 'PATROL');
+    if (!pz) return { ok: false, message: 'Patrol zone not found.' };
+
+    const tacticUpper = tactic.toUpperCase();
+    if (tacticUpper === 'SECTOR_ORBIT_SHIFT') {
+      const jammer = this.zones.find(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
+      if (jammer && pz.center && pz.radius_m) {
+        const vLat = pz.center[0] - jammer.center![0];
+        const vLon = pz.center[1] - jammer.center![1];
+        const mag = Math.hypot(vLat, vLon) || 0.001;
+        const shiftM = 220;
+        const shiftLat = (shiftM / M_PER_DEG_LAT) * (vLat / mag);
+        const shiftLon = (shiftM / (M_PER_DEG_LAT * Math.cos((pz.center[0] * Math.PI) / 180))) * (vLon / mag);
+        pz.center = [pz.center[0] + shiftLat, pz.center[1] + shiftLon];
+      } else if (pz.center) {
+        pz.center = [pz.center[0] + 0.002, pz.center[1] + 0.002];
+      }
+      for (const d of this.drones) {
+        d.jammedAt = null;
+        d.spoofedAt = null;
+        d.safeAirspaceTime = 10;
+      }
+      this.zones = [...this.zones];
+      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'SECTOR_ORBIT_SHIFT', new_center: pz.center }, operatorId);
+      return { ok: true, message: 'Sector Orbit Shift executed. Swarm shifted to clear airspace.' };
+    } else if (tacticUpper === 'TIGHT_MESH') {
+      if (pz.radius_m) pz.radius_m = Math.round(pz.radius_m * 0.6);
+      this.zones = [...this.zones];
+      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'TIGHT_MESH', radius_m: pz.radius_m }, operatorId);
+      return { ok: true, message: `Tight Mesh Formation activated (${pz.radius_m}m).` };
+    } else if (tacticUpper === 'WIDE_RECON') {
+      if (pz.radius_m) pz.radius_m = Math.round(pz.radius_m * 1.45);
+      this.zones = [...this.zones];
+      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'WIDE_RECON', radius_m: pz.radius_m }, operatorId);
+      return { ok: true, message: `Dispersed Wide Recon activated (${pz.radius_m}m).` };
+    } else if (tacticUpper === 'RESYNC_EQUIDISTANT') {
+      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'RESYNC_EQUIDISTANT' }, operatorId);
+      return { ok: true, message: 'Equidistant Phase Resynchronization activated.' };
+    } else if (tacticUpper === 'EGRESS_CORRIDOR') {
+      for (const d of this.drones) {
+        if (d.mode === 'PATROL' || d.mode === 'LOITER') {
+          this.command(d.id, 'SAFE_CORRIDOR_RETREAT', operatorId);
+        }
+      }
+      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'EGRESS_CORRIDOR' }, operatorId);
+      return { ok: true, message: 'Emergency Egress ordered via safe corridor.' };
+    }
+    return { ok: false, message: `Unknown tactic ${tactic}.` };
+  }
+
+  checkPatrolJamming(): void {
+    const jammers = this.zones.filter(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
+    if (!jammers.length) return;
+    const patrols = this.zones.filter(z => z.is_active && z.zone_type === 'PATROL' && z.center && z.radius_m);
+    for (const pz of patrols) {
+      const isJammed = jammers.some(j => distanceM(pz.center![0], pz.center![1], j.center![0], j.center![1]) <= (pz.radius_m! + j.radius_m!));
+      if (isJammed) {
+        const existing = this.recs.find(r => r.trigger_event === 'PATROL_ZONE_JAMMED' && r.drone_id === pz.id);
+        if (!existing) {
+          const rec: Recommendation = {
+            id: this.recs.length + 1,
+            drone_id: pz.id,
+            trigger_event: 'PATROL_ZONE_JAMMED',
+            blocked_action: 'NONE',
+            blocked_reason: '',
+            recommended_action: 'SECTOR_ORBIT_SHIFT',
+            status: 'PENDING',
+            reason: 'Active EW Jamming overlaps ' + pz.name + '. Shift patrol orbit to clear airspace to preserve swarm communications and GPS navigation integrity.',
+            recommendation_details: '1. Displace patrol orbit center away from active EW jammer vector. 2. Maintain equidistant swarm spacing (360° / N) in safe airspace. 3. Preserve RF/mesh cross-ranging and communication line of sight.',
+            operator_id: null,
+            approved_at: null,
+            timestamp: new Date().toISOString(),
+          };
+          this.recs = [rec, ...this.recs];
+          this.log('RECOMMENDATION_ISSUED', null, { recommendation_id: rec.id, patrol_zone: pz.name, action: rec.recommended_action }, 'AUTONOMOUS');
+        }
+      }
+    }
+  }
+
+  deleteZone(zoneId: number): boolean {
+    const z = this.zones.find(zone => zone.id === zoneId);
+    if (!z) return false;
+    z.is_active = false;
+    this.zones = [...this.zones];
+    this.log('ZONE_DELETED', null, { zone_id: zoneId, name: z.name, zone_type: z.zone_type }, 'OPERATOR_1');
+    return true;
+  }
+
   triggerWeather(kind: WeatherKind): void {
     const active = this.zones.filter(z => z.is_active && isWeather(z));
     if (active.length >= 2) active[0].is_active = false;
@@ -383,7 +531,14 @@ export class OfflineSimulator {
   }
 
   /** Operator-chosen command for one drone (the store has already checked it is allowed). */
-  command(droneId: number, action: ActionOption['id'], operatorId: string): { ok: boolean; message: string } {
+  command(
+    droneId: number,
+    action: string,
+    operatorId: string,
+    targetZoneId?: number,
+    targetPoint?: [number, number],
+    pathType: 'SAFE' | 'RISKY' = 'SAFE',
+  ): { ok: boolean; message: string } {
     const d = this.drone(droneId);
     if (!d || d.mode === 'LANDED') return { ok: false, message: `Drone ${droneId} has landed.` };
     if (this.linkDown(d)) {

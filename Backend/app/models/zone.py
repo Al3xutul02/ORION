@@ -15,7 +15,7 @@ class TacticalZone(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String(100), nullable=False)
-    zone_type = Column(String(50), nullable=False, index=True)  # BASE, SAFE_CORRIDOR, INTERFERENCE, THREAT
+    zone_type = Column(String(50), nullable=False, index=True)  # BASE, SAFE_CORRIDOR, INTERFERENCE, THREAT, PATROL
     geometry_type = Column(String(20), default="POLYGON")       # POLYGON or CIRCLE
     
     # Coordinates in JSON:

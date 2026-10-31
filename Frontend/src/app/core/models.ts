@@ -2,10 +2,12 @@
 // FLEET_UPDATE WebSocket payload (Backend/app/services/simulator.py).
 
 export type TrustStatus = 'GREEN' | 'YELLOW' | 'RED';
-export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'WEATHER';
+export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'WEATHER' | 'PATROL';
 export type WeatherKind = 'STORM' | 'RAIN' | 'WIND';
 export type DataMode = 'live' | 'offline';
 export type LinkState = 'connecting' | 'online' | 'offline';
+export type ZoneTactic = 'SECTOR_ORBIT_SHIFT' | 'TIGHT_MESH' | 'WIDE_RECON' | 'EGRESS_CORRIDOR' | 'RESYNC_EQUIDISTANT';
+export type MapMode = 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter';
 
 export interface ScoreBreakdown {
   drone_id: number;
@@ -40,6 +42,7 @@ export interface DroneState {
   uncertainty_radius_m: number;
   reason: string;
   scores?: ScoreBreakdown;
+  patrol_zone_id?: number;
   /** Drone-to-drone mesh view (Backend/app/services/mesh.py, core/mesh.ts). */
   mesh?: MeshView | null;
   /** SIM = ORION's simulator; MAVLINK = an external vehicle (SITL, real drone) heard over UDP. */

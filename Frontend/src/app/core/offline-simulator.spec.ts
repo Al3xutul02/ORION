@@ -45,4 +45,20 @@ describe('OfflineSimulator (extended exercise)', () => {
     expect(sim.command(5, 'LOITER', 'OPERATOR_1').ok).toBeFalse();
     expect(sim.command(6, 'LOITER', 'OPERATOR_1').ok).toBeTrue();
   });
+
+  it('supports creating and deleting patrol zones and commanding patrol & loiter', () => {
+    const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
+    const pz = sim.addPatrolZone('Patrol Zone Test', [44.33, 23.82], 400);
+    expect(pz.id).toBeGreaterThan(100);
+    expect(pz.name).toBe('Patrol Zone Test');
+
+    const cmdPatrol = sim.command(1, 'JOIN_PATROL', 'OPERATOR_1', pz.id, undefined, 'SAFE');
+    expect(cmdPatrol.ok).toBeTrue();
+
+    const cmdLoiter = sim.command(2, 'LOITER_AT', 'OPERATOR_1', undefined, [44.32, 23.81], 'RISKY');
+    expect(cmdLoiter.ok).toBeTrue();
+
+    const deleted = sim.deleteZone(pz.id);
+    expect(deleted).toBeTrue();
+  });
 });
