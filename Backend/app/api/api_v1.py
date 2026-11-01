@@ -6,6 +6,8 @@ from app.api.endpoints import (
     aar_router,
     simulation_router,
     copilot_router,
+    training_router,
+    radio_router,
     mavlink_router
 )
 
@@ -16,4 +18,6 @@ api_router.include_router(actions_router)
 api_router.include_router(aar_router)
 api_router.include_router(simulation_router)
 api_router.include_router(copilot_router)
+api_router.include_router(training_router)
+api_router.include_router(radio_router)
 api_router.include_router(mavlink_router)

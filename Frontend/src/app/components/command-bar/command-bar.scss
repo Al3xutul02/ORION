@@ -173,6 +173,40 @@
   }
 }
 
+.ptt {
+  min-width: 92px;
+  user-select: none;
+  touch-action: none;
+
+  &.rec {
+    color: #fff;
+    border-color: var(--red);
+    background: var(--red-bg);
+
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 4px;
+      border-radius: 50%;
+      background: var(--red);
+      animation: ptt-blink 1s steps(2) infinite;
+    }
+  }
+
+  &.busy { color: var(--violet); }
+}
+
+@keyframes ptt-blink {
+  50% { opacity: 0.2; }
+}
+
+.live-banner.training {
+  .live-title { color: var(--violet); }
+  .btn { margin-left: auto; }
+  em { color: var(--violet); font-style: normal; }
+}
+
 .track {
   position: relative;
   flex: 1;

@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
-import anthropic
-import httpx2
+import httpx
 import pytest
+from google.genai import errors, types
 
 from app.services.copilot_service import copilot_service
 
@@ -14,29 +14,30 @@ EVENTS = [
 ]
 
 
-class FakeMessages:
-    """Stands in for client.beta.messages and records what the copilot sent."""
+class FakeModels:
+    """Stands in for client.models and records what the copilot sent."""
 
-    def __init__(self, text="", stop_reason="end_turn", error=None):
-        self.text, self.stop_reason, self.error, self.calls = text, stop_reason, error, []
+    def __init__(self, text="", finish_reason=types.FinishReason.STOP, block_reason=None, error=None):
+        self.text, self.finish_reason, self.block_reason, self.error, self.calls = text, finish_reason, block_reason, error, []
 
-    def create(self, **kwargs):
+    def generate_content(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
         return SimpleNamespace(
-            stop_reason=self.stop_reason,
-            model=kwargs["model"],
-            content=[SimpleNamespace(type="thinking", thinking=""), SimpleNamespace(type="text", text=self.text)],
+            text=self.text,
+            model_version=kwargs["model"],
+            candidates=[SimpleNamespace(finish_reason=self.finish_reason)],
+            prompt_feedback=SimpleNamespace(block_reason=self.block_reason) if self.block_reason else None,
         )
 
 
 @pytest.fixture
-def fake_claude(monkeypatch):
+def fake_gemini(monkeypatch):
     def install(**kwargs):
-        messages = FakeMessages(**kwargs)
-        monkeypatch.setattr(copilot_service, "_client", SimpleNamespace(beta=SimpleNamespace(messages=messages)))
-        return messages
+        models = FakeModels(**kwargs)
+        monkeypatch.setattr(copilot_service, "_client", SimpleNamespace(models=models))
+        return models
     return install
 
 
@@ -45,8 +46,12 @@ def ask(client, **extra):
     return client.post("/api/v1/copilot/ask", json=body)
 
 
-def test_answers_from_client_ledger_and_keeps_only_real_citations(client, fake_claude):
-    fake = fake_claude(text="RTL was blocked for Drone 2 [#2]. Something else [#99].")
+def context_of(call):
+    return call["config"].system_instruction[1]
+
+
+def test_answers_from_client_ledger_and_keeps_only_real_citations(client, fake_gemini):
+    fake = fake_gemini(text="RTL was blocked for Drone 2 [#2]. Something else [#99].")
     res = ask(client)
     assert res.status_code == 200
     data = res.json()
@@ -54,52 +59,97 @@ def test_answers_from_client_ledger_and_keeps_only_real_citations(client, fake_c
     assert data["source"] == "client" and data["chain_valid"] is True and data["records"] == 2
 
     sent = fake.calls[0]
-    assert "tools" not in sent  # read-only: the model is given no tools
-    assert sent["fallbacks"] == "default"
-    context = sent["system"][1]["text"]
+    assert not sent["config"].tools  # read-only: the model is given no tools
+    context = context_of(sent)
     assert "#2 | T+1:00" in context and "RECOMMENDATION_ISSUED" in context
-    assert sent["messages"][-1] == {"role": "user", "content": "Why was RTL blocked?"}
+    last = sent["contents"][-1]
+    assert last.role == "user" and last.parts[0].text == "Why was RTL blocked?"
 
 
-def test_history_is_trimmed_to_start_with_a_user_turn(client, fake_claude):
-    fake = fake_claude(text="ok")
+def test_history_is_trimmed_to_start_with_a_user_turn(client, fake_gemini):
+    fake = fake_gemini(text="ok")
     history = [{"role": "assistant", "content": "hi"}, {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
     ask(client, history=history)
-    roles = [m["role"] for m in fake.calls[0]["messages"]]
-    assert roles == ["user", "assistant", "user"]
+    roles = [c.role for c in fake.calls[0]["contents"]]
+    assert roles == ["user", "model", "user"]  # Gemini calls the assistant "model"
 
 
-def test_reports_a_broken_chain_to_the_model(client, fake_claude):
-    fake = fake_claude(text="ok")
+def test_reports_a_broken_chain_to_the_model(client, fake_gemini):
+    fake = fake_gemini(text="ok")
     ask(client, chain_valid=False)
-    assert "BROKEN" in fake.calls[0]["system"][1]["text"]
+    assert "BROKEN" in context_of(fake.calls[0])
 
 
-def test_refusal_is_returned_as_such(client, fake_claude):
-    fake_claude(text="", stop_reason="refusal")
+@pytest.mark.parametrize("blocked", [
+    {"finish_reason": types.FinishReason.SAFETY},
+    {"block_reason": types.BlockedReason.PROHIBITED_CONTENT},
+])
+def test_refusal_is_returned_as_such(client, fake_gemini, blocked):
+    fake_gemini(text="", **blocked)
     data = ask(client).json()
     assert data["refused"] is True and data["cited_ids"] == []
 
 
-def test_missing_credentials_give_a_clear_503(client, fake_claude):
-    response = httpx2.Response(401, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
-    fake_claude(error=anthropic.AuthenticationError("invalid x-api-key", response=response, body=None))
+def test_invalid_key_gives_a_clear_503(client, fake_gemini):
+    # What Gemini answers for a wrong key: 400 INVALID_ARGUMENT, "API key not valid".
+    fake_gemini(error=errors.ClientError(400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}))
     res = ask(client)
     assert res.status_code == 503
-    assert "ANTHROPIC_API_KEY" in res.json()["detail"]
+    assert "GEMINI_API_KEY" in res.json()["detail"]
 
 
-def test_no_credentials_at_all_give_a_clear_503(client, fake_claude):
-    # What the SDK raises when neither a key nor a profile is available.
-    fake_claude(error=TypeError('"Could not resolve authentication method. Expected one of api_key..."'))
+def test_no_key_at_all_gives_a_clear_503(client, monkeypatch):
+    monkeypatch.setattr(copilot_service, "_client", None)
+    monkeypatch.setattr("app.services.copilot_service.settings.GEMINI_API_KEY", None)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     res = ask(client)
     assert res.status_code == 503
-    assert "ANTHROPIC_API_KEY" in res.json()["detail"]
+    assert "GEMINI_API_KEY" in res.json()["detail"]
 
 
-def test_server_ledger_is_used_when_no_events_are_sent(client, fake_claude):
-    fake = fake_claude(text="ok")
+@pytest.mark.parametrize("error, expected", [
+    (errors.ClientError(429, {"error": {"code": 429, "message": "Resource exhausted", "status": "RESOURCE_EXHAUSTED"}}), "rate limited"),
+    (errors.ClientError(404, {"error": {"code": 404, "message": "models/x is not found", "status": "NOT_FOUND"}}), "COPILOT_MODEL"),
+    (errors.ServerError(503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}), "Gemini API error (503)"),
+    (httpx.ConnectError("no route"), "no internet"),
+])
+def test_api_failures_become_readable_503s(client, fake_gemini, error, expected):
+    fake_gemini(error=error)
+    res = ask(client)
+    assert res.status_code == 503 and expected in res.json()["detail"]
+
+
+def test_server_ledger_is_used_when_no_events_are_sent(client, fake_gemini):
+    fake = fake_gemini(text="ok")
     res = client.post("/api/v1/copilot/ask", json={"question": "What happened?"})
     assert res.status_code == 200
     assert res.json()["source"] == "server"
-    assert "<aar_log>" in fake.calls[0]["system"][1]["text"]
+    assert "<aar_log>" in context_of(fake.calls[0])
+
+
+class FlakyModels(FakeModels):
+    """The main model is overloaded; the fallback answers."""
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise errors.ServerError(503, {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}})
+        return SimpleNamespace(text=self.text, model_version=kwargs["model"],
+                               candidates=[SimpleNamespace(finish_reason=types.FinishReason.STOP)], prompt_feedback=None)
+
+
+def test_overloaded_model_falls_back(client, monkeypatch):
+    from app.core.config import settings
+    models = FlakyModels(text="ok [#2]")
+    monkeypatch.setattr(copilot_service, "_client", SimpleNamespace(models=models))
+    data = ask(client).json()
+    assert [c["model"] for c in models.calls] == [settings.COPILOT_MODEL, settings.COPILOT_FALLBACK_MODEL]
+    assert data["model"] == settings.COPILOT_FALLBACK_MODEL and data["cited_ids"] == [2]
+
+
+def test_grouped_citations_are_validated_too():
+    from app.services.copilot_service import CITATION_GROUP_RE, RECORD_ID_RE
+    answer = "Spoofing [ex. #55, #113] and [#7], not [step 2] or #9."
+    found = [int(i) for g in CITATION_GROUP_RE.findall(answer) for i in RECORD_ID_RE.findall(g)]
+    assert found == [55, 113, 7]

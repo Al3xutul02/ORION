@@ -3,17 +3,19 @@ import { AarLog } from '../../components/aar-log/aar-log';
 import { CopilotPanel } from '../../components/copilot-panel/copilot-panel';
 import { DecisionPanel } from '../../components/decision-panel/decision-panel';
 import { FleetPanel } from '../../components/fleet-panel/fleet-panel';
+import { RadioPanel } from '../../components/radio-panel/radio-panel';
 import { TheatreMap } from '../../components/theatre-map/theatre-map';
 
 @Component({
   selector: 'app-dashboard',
-  imports: [FleetPanel, TheatreMap, DecisionPanel, AarLog, CopilotPanel],
+  imports: [FleetPanel, TheatreMap, DecisionPanel, AarLog, RadioPanel, CopilotPanel],
   template: `
     <app-fleet-panel class="fleet" />
     <app-theatre-map class="map" />
     <app-decision-panel class="decisions" />
     <div class="bottom">
       <app-aar-log />
+      <app-radio-panel />
       <app-copilot-panel />
     </div>
   `,
@@ -37,7 +39,7 @@ import { TheatreMap } from '../../components/theatre-map/theatre-map';
     .bottom {
       grid-area: bottom;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 330px) minmax(300px, 400px);
       gap: 10px;
       min-height: 0;
       position: relative;
@@ -64,7 +66,7 @@ import { TheatreMap } from '../../components/theatre-map/theatre-map';
       }
       .bottom {
         grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: 300px 380px;
+        grid-template-rows: 300px 300px 380px;
       }
     }
   `,

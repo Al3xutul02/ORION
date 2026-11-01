@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { AuditEvent } from '../../core/models';
 import { OrionStore, summarise } from '../../core/orion-store.service';
 
-const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
+const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info' | 'radio'> = {
   SPOOFING_ATTACK_INITIATED: 'critical',
   COMMAND_REPLAY_REJECTED: 'critical',
   COMMAND_AUTH_FAILED: 'critical',
@@ -32,6 +32,7 @@ const SEVERITY: Record<string, 'critical' | 'warn' | 'ok' | 'info'> = {
   GPS_RESTORED: 'ok',
   COMMAND_LINK_RESTORED: 'ok',
   PATROL_REBALANCED: 'info',
+  RADIO_TRANSMISSION: 'radio',
 };
 
 @Component({
@@ -55,7 +56,8 @@ export class AarLog {
       if (!ids.length) return;
       queueMicrotask(() => {
         const rows = [...this.host.nativeElement.querySelectorAll<HTMLElement>('[data-event-id]')];
-        rows.find(r => ids.includes(Number(r.dataset['eventId'])))?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        const first = rows.find(r => Number(r.dataset['eventId']) === ids[0]) ?? rows.find(r => ids.includes(Number(r.dataset['eventId'])));
+        first?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       });
     });
   }

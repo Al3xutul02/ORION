@@ -4,6 +4,8 @@ from app.api.endpoints.actions import router as actions_router
 from app.api.endpoints.aar import router as aar_router
 from app.api.endpoints.simulation import router as simulation_router
 from app.api.endpoints.copilot import router as copilot_router
+from app.api.endpoints.training import router as training_router
+from app.api.endpoints.radio import router as radio_router
 from app.api.endpoints.mavlink import router as mavlink_router
 
 __all__ = [
@@ -13,5 +15,7 @@ __all__ = [
     "aar_router",
     "simulation_router",
     "copilot_router",
+    "training_router",
+    "radio_router",
     "mavlink_router",
 ]

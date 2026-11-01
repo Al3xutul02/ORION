@@ -1,8 +1,9 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import { ORION_CONFIG } from './config';
 import { AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
+import { AdversaryMoveKind } from './training';
 
 export type SimulationAction =
   | 'start'
@@ -135,6 +136,34 @@ export class OrionApi {
     elapsed_s?: number;
   }) {
     return firstValueFrom(this.http.post<CopilotAnswer>(`${this.base}/copilot/ask`, body));
+  }
+
+  /** Gemini as the training adversary. Short timeout: the browser plays locally rather than wait. */
+  trainingMove(state: Record<string, unknown>) {
+    return firstValueFrom(
+      this.http.post<{ move: AdversaryMoveKind; target_drone: number | null; wait_s: number; reason: string; model: string }>(
+        `${this.base}/training/adversary-move`, state,
+      ).pipe(timeout(12000)),
+    );
+  }
+
+  trainingDebrief(results: Record<string, unknown>) {
+    return firstValueFrom(
+      this.http.post<{ summary: string; strengths: string[]; improvements: string[]; model: string }>(
+        `${this.base}/training/debrief`, results,
+      ).pipe(timeout(30000)),
+    );
+  }
+
+  /** One push-to-talk transmission: transcribed by Gemini; logged server-side when `log` (Live). */
+  radioTransmit(body: {
+    audio_base64: string; mime_type: string; duration_s: number; operator_id: string; started_at: string; log: boolean;
+  }) {
+    return firstValueFrom(
+      this.http.post<{ transcript: string; language: string; drones: number[]; kind: string; model: string; logged: boolean; event_id: number | null }>(
+        `${this.base}/radio/transmissions`, body,
+      ).pipe(timeout(30000)),
+    );
   }
 
   simulationStatus() {

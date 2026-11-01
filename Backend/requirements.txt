@@ -10,5 +10,5 @@ aiomysql>=0.2.0
 cryptography>=42.0.0
 python-dotenv>=1.0.1
 httpx>=0.27.0
-anthropic>=2.3.0  # copilot; needs Python 3.10+
+google-genai>=2.30.1  # copilot (Gemini API)
 pytest>=8.0.0

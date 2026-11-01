@@ -33,7 +33,7 @@
 
   <div class="clock mono" aria-label="Mission time">
     <span class="t">T+{{ clock() }}</span>
-    <span class="step">{{ store.mode() === 'offline' ? currentStep().label : 'Dynamic battlefield' }}</span>
+    <span class="step">{{ store.mode() === 'offline' ? (store.training() ? 'AI training' : currentStep().label) : 'Dynamic battlefield' }}</span>
   </div>
 
   <div class="controls no-print">
@@ -50,6 +50,26 @@
         }
       </div>
     }
+    <button
+      class="btn ptt"
+      type="button"
+      [class.rec]="store.radio() === 'recording'"
+      [class.busy]="store.radio() === 'transcribing'"
+      (pointerdown)="$event.preventDefault(); store.pttDown()"
+      (pointerup)="store.pttUp()"
+      (pointerleave)="store.pttUp()"
+      (pointercancel)="store.pttUp()"
+      (contextmenu)="$event.preventDefault()"
+      title="Push-to-talk: hold (or hold Space) and speak. The transcript goes into the after-action log."
+      [attr.aria-label]="'Push to talk'"
+      [attr.aria-pressed]="store.radio() === 'recording'"
+    >
+      @switch (store.radio()) {
+        @case ('recording') { <span class="dot"></span> REC 0:{{ store.radioSeconds().toString().padStart(2, '0') }} }
+        @case ('transcribing') { Transcribing… }
+        @default { &#127897; PTT }
+      }
+    </button>
     <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
       {{ store.muted() ? '&#128263;' : '&#128266;' }}
     </button>
@@ -57,7 +77,27 @@
 </header>
 
 <div class="timeline no-print">
-  @if (store.mode() === 'offline') {
+  @if (store.mode() === 'offline' && store.training(); as t) {
+    <div class="live-banner training">
+      <span class="pulse-dot" [class.active]="t.phase === 'running'"></span>
+      <span class="live-title">AI training</span>
+      <span class="live-sub">
+        @switch (t.phase) {
+          @case ('running') {
+            {{ trainingRemaining() }} left &middot; adversary: {{ t.adversary === 'AI' ? 'Gemini' : 'local rules' }}
+            &middot; {{ t.moves.length }} {{ t.moves.length === 1 ? 'attack' : 'attacks' }} so far
+            &middot; {{ store.pendingRecommendations().length }} pending {{ store.pendingRecommendations().length === 1 ? 'decision' : 'decisions' }}
+            @if (t.requesting) { &middot; <em>the adversary is choosing...</em> }
+          }
+          @case ('debriefing') { Session over. Building the debrief... }
+          @default { Session over. }
+        }
+      </span>
+      @if (t.phase === 'running') {
+        <button class="btn sm" type="button" (click)="store.finishTraining()">End &amp; debrief</button>
+      }
+    </div>
+  } @else if (store.mode() === 'offline') {
     <div class="track">
       <div class="fill" [style.width.%]="progress()"></div>
       @for (s of scenario(); track s.at) {
@@ -68,6 +108,7 @@
       }
     </div>
     <div class="inject">
+      <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary (Gemini, or local rules offline) attacks for 3 minutes; you get a scored debrief">&#127919; AI training</button>
       <span class="hint">Demo toys:</span>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>

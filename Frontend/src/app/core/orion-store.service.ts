@@ -8,6 +8,11 @@ import {
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
+import { RadioEntry, radioEntry } from './radio';
+import {
+  AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
+  scoreSession, seededRandom,
+} from './training';
 
 export interface Toast {
   id: number;
@@ -33,6 +38,21 @@ export type Trigger =
   | 'weather-clear';
 
 const HISTORY_LEN = 90;
+
+/** An AI training session in Demo mode (core/training.ts). */
+export interface TrainingSession {
+  phase: 'running' | 'debriefing' | 'done';
+  startedAt: number;
+  lengthS: number;
+  nextMoveAt: number;
+  requesting: boolean;
+  /** Who plays the adversary: Gemini on the backend, or the local rules once that failed. */
+  adversary: 'AI' | 'LOCAL';
+  moves: AdversaryMove[];
+  redSeconds: Record<number, number>;
+  lastElapsed: number;
+  debrief: TrainingDebrief | null;
+}
 
 /** Events worth interrupting the operator for, with how loud they are. */
 const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
@@ -93,6 +113,14 @@ export class OrionStore implements OnDestroy {
   readonly highlightedEvents = signal<number[]>([]);
   readonly mapMode = signal<MapMode>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+  readonly training = signal<TrainingSession | null>(null);
+  /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
+  readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
+  readonly radioSeconds = signal(0);
+  /** Every transmission in the log, oldest first (the Radio panel). */
+  readonly radioEntries = computed(() => this.events().map(radioEntry).filter((e): e is RadioEntry => e !== null));
+  /** What was just said about each drone, shown as a bubble on the map for a few seconds. */
+  readonly radioBubbles = signal<Record<number, { text: string; speaker: string; id: number }>>({});
   readonly commandScope = signal<'drone' | 'zone'>('drone');
 
   setMapMode(mode: MapMode): void {
@@ -172,6 +200,7 @@ export class OrionStore implements OnDestroy {
     this.verification.set(null);
     this.trustHistory.set({});
     this.clearCopilot();
+    this.training.set(null);
     this.lastAlertedId = 0;
     this.elapsed.set(0);
     if (mode === 'live') this.connectLive(allowFallback);
@@ -298,6 +327,126 @@ export class OrionStore implements OnDestroy {
       const worst = [...u.drones].sort((a, b) => a.trust_score - b.trust_score)[0];
       if (worst && worst.trust_status !== 'GREEN') this.selectedDroneId.set(worst.drone_id);
     }
+    if (this.training()?.phase === 'running') this.trainingTick(u);
+  }
+
+  // ---- AI training (Demo) ------------------------------------------------------------------
+
+  /** Starts a fresh Demo run where an adversary, not the fixed script, stages the attacks. */
+  async startTraining(): Promise<void> {
+    if (this.mode() !== 'offline') this.setMode('offline');
+    await this.reset();
+    if (!this.offline) return;
+    this.offline.scripted = false;
+    this.training.set({
+      phase: 'running', startedAt: this.elapsed(), lengthS: SESSION_LENGTH_S, nextMoveAt: this.elapsed() + FIRST_MOVE_AT_S,
+      requesting: false, adversary: 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
+    });
+    await this.start();
+  }
+
+  /** Ends the session now (or when time is up) and builds the debrief. */
+  async finishTraining(): Promise<void> {
+    const t = this.training();
+    if (!t || t.phase !== 'running' || !this.offline) return;
+    this.offline.stop();
+    this.running.set(false);
+    this.training.set({ ...t, phase: 'debriefing' });
+
+    const end = this.elapsed();
+    const events = this.offline.ledger.events;
+    const decisions = decisionsFromLog(events, t.startedAt, end);
+    const breaches = events.filter(e => e.event_type === 'WEATHER_LIMIT_EXCEEDED').length;
+    const { score, grade, lines } = scoreSession(decisions, t.redSeconds, breaches, end);
+    let text = localDebrief(decisions, t.redSeconds, score, grade);
+    let source: 'AI' | 'LOCAL' = 'LOCAL';
+    let model: string | undefined;
+    try {
+      const res = await this.api.trainingDebrief({
+        score, duration_s: Math.round(end - t.startedAt),
+        decisions: decisions.map(d => ({ drone_id: d.droneId, action: d.action, issued_at_s: d.issuedAt, reaction_s: d.reactionS, outcome: d.outcome })),
+        red_seconds: Object.fromEntries(Object.entries(t.redSeconds).map(([k, v]) => [k, Math.round(v)])),
+        attacks: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone, reason: m.reason })),
+        extra: { grade, deductions: lines, target_reaction_s: TARGET_REACTION_S, weather_breaches: breaches },
+      });
+      text = { summary: res.summary, strengths: res.strengths, improvements: res.improvements };
+      source = 'AI';
+      model = res.model;
+    } catch { /* backend or Gemini unavailable: keep the local debrief */ }
+    const now = this.training();
+    if (now?.phase !== 'debriefing') return; // reset while waiting
+    this.training.set({ ...now, phase: 'done', debrief: { score, grade, lines, decisions, ...text, source, model } });
+  }
+
+  /** Closes the debrief and goes back to the regular scripted Demo. */
+  async closeTraining(): Promise<void> {
+    await this.reset();
+  }
+
+  private trainingTick(u: FleetUpdate): void {
+    const t = this.training()!;
+    const dt = Math.max(0, u.elapsed_time - t.lastElapsed);
+    const redSeconds = { ...t.redSeconds };
+    for (const d of u.drones) if (d.trust_status === 'RED') redSeconds[d.drone_id] = (redSeconds[d.drone_id] ?? 0) + dt;
+    this.training.set({ ...t, redSeconds, lastElapsed: u.elapsed_time });
+    if (u.elapsed_time - t.startedAt >= t.lengthS) {
+      void this.finishTraining();
+    } else if (u.elapsed_time >= t.nextMoveAt && !t.requesting) {
+      void this.adversaryTurn();
+    }
+  }
+
+  private async adversaryTurn(): Promise<void> {
+    const sim = this.offline;
+    const t = this.training();
+    if (!sim || !t) return;
+    this.training.set({ ...t, requesting: true });
+    const options = sim.adversaryOptions();
+    const now = this.elapsed();
+    const decisions = decisionsFromLog(sim.ledger.events, t.startedAt, now);
+    const resolved = decisions.filter(d => d.reactionS !== null);
+    const avgReaction = resolved.length ? resolved.reduce((a, d) => a + d.reactionS!, 0) / resolved.length : null;
+    const pending = this.pendingRecommendations().map(r => {
+      const issued = decisions.find(d => d.recId === r.id)?.issuedAt ?? now;
+      return { droneId: r.drone_id, action: r.recommended_action, waitingS: Math.round(now - issued) };
+    });
+
+    let move: AdversaryMove | null = null;
+    if (t.adversary === 'AI') {
+      try {
+        const res = await this.api.trainingMove({
+          elapsed_s: Math.round(now - t.startedAt), remaining_s: Math.round(t.lengthS - (now - t.startedAt)),
+          available: options.available, eligible: options.eligible,
+          drones: this.drones().map(d => ({ id: d.drone_id, status: d.trust_status, trust: Math.round(d.trust_score), mode: d.flight_mode })),
+          pending_decisions: pending.map(p => ({ drone_id: p.droneId, action: p.action, waiting_s: p.waitingS })),
+          operator: {
+            decisions: decisions.length, avg_reaction_s: avgReaction === null ? null : Math.round(avgReaction),
+            slowest_reaction_s: resolved.length ? Math.round(Math.max(...resolved.map(d => d.reactionS!))) : null,
+            missed: decisions.filter(d => d.reactionS === null).length,
+          },
+          history: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone })),
+        });
+        move = { move: res.move, target_drone: res.target_drone, wait_s: res.wait_s, reason: res.reason, source: 'AI' };
+      } catch {
+        this.pushToast('info', 'Adversar local', 'Gemini nu răspunde: adversarul continuă cu regulile locale.');
+      }
+    }
+    const current = this.training();
+    if (!current || current.phase !== 'running' || this.offline !== sim) return; // ended while we waited
+    const rnd = seededRandom(Math.round(now * 1000) + current.moves.length);
+    move ??= localAdversary(options, pending, current.moves, avgReaction, rnd);
+    // The AI's choice was made a few seconds ago: if it's no longer possible, play locally.
+    if (!sim.applyAdversaryMove(move.move, move.target_drone)) {
+      move = localAdversary(sim.adversaryOptions(), pending, current.moves, avgReaction, rnd);
+      sim.applyAdversaryMove(move.move, move.target_drone, 'LOCAL_ADVERSARY');
+    }
+    this.training.set({
+      ...current,
+      requesting: false,
+      adversary: move.source === 'AI' ? 'AI' : 'LOCAL',
+      moves: [...current.moves, { ...move, at_s: Math.round(this.elapsed() - current.startedAt) }],
+      nextMoveAt: this.elapsed() + move.wait_s,
+    });
   }
 
   private setEvents(events: AuditEvent[]): void {
@@ -311,6 +460,7 @@ export class OrionStore implements OnDestroy {
       return;
     }
     for (const e of fresh) {
+      if (e.event_type === 'RADIO_TRANSMISSION') this.showBubbles(e);
       const alert = ALERTS[e.event_type];
       if (alert) {
         this.pushToast(alert.level, alert.title, summarise(e));
@@ -350,7 +500,10 @@ export class OrionStore implements OnDestroy {
     this.toasts.set([]);
     this.clearCopilot();
     this.lastAlertedId = 0;
+    this.training.set(null);
+    this.radioBubbles.set({});
     if (this.offline) {
+      this.offline.scripted = true;
       this.offline.reset();
       this.running.set(false);
     } else {
@@ -615,6 +768,115 @@ export class OrionStore implements OnDestroy {
     }
   }
 
+  // ---- radio log (push-to-talk) ------------------------------------------------------------
+
+  /** A drone mentioned on the radio gets the line as a bubble on the map, then it fades. */
+  private showBubbles(e: AuditEvent): void {
+    const entry = radioEntry(e);
+    if (!entry?.drones.length) return;
+    const text = entry.text.length > 90 ? entry.text.slice(0, 88) + '…' : entry.text;
+    this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) next[d] = { text, speaker: entry.speaker, id: e.id };
+      return next;
+    });
+    setTimeout(() => this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) if (next[d]?.id === e.id) delete next[d];
+      return next;
+    }), 7000);
+  }
+
+  private recorder: MediaRecorder | null = null;
+  private recStartedAt = 0;
+  private recTimer: ReturnType<typeof setInterval> | null = null;
+  private pttReleased = false;
+
+  /** Mic keyed (button pressed or Space held): start recording one transmission. */
+  async pttDown(): Promise<void> {
+    if (this.radio() !== 'idle') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      this.pushToast('warn', 'Radio unavailable', 'This browser cannot record from the microphone.');
+      return;
+    }
+    this.radio.set('recording');
+    this.radioSeconds.set(0);
+    this.pttReleased = false;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch {
+      this.radio.set('idle');
+      this.pushToast('warn', 'Microphone blocked', 'Allow microphone access for this page to use push-to-talk.');
+      return;
+    }
+    const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) ?? '';
+    const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    const startedIso = new Date().toISOString();
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop()); // mic indicator off between transmissions
+      const duration = (performance.now() - this.recStartedAt) / 1000;
+      void this.sendTransmission(new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' }), duration, startedIso);
+    };
+    this.recorder = recorder;
+    this.recStartedAt = performance.now();
+    recorder.start();
+    this.recTimer = setInterval(() => {
+      const t = (performance.now() - this.recStartedAt) / 1000;
+      this.radioSeconds.set(Math.floor(t));
+      if (t >= 60) this.pttUp(); // a stuck key shouldn't record forever
+    }, 250);
+    if (this.pttReleased) this.pttUp(); // released while the permission prompt was open
+  }
+
+  /** Mic released: stop recording and send the transmission for transcription. */
+  pttUp(): void {
+    this.pttReleased = true;
+    if (this.radio() !== 'recording' || !this.recorder) return;
+    if (this.recTimer) clearInterval(this.recTimer);
+    this.recTimer = null;
+    const r = this.recorder;
+    this.recorder = null;
+    if (r.state !== 'inactive') r.stop();
+  }
+
+  private async sendTransmission(blob: Blob, durationS: number, startedIso: string): Promise<void> {
+    if (durationS < 0.6 || blob.size < 500) {
+      this.radio.set('idle');
+      this.pushToast('info', 'Transmission too short', 'Hold the button (or Space) while you talk.');
+      return;
+    }
+    this.radio.set('transcribing');
+    const sim = this.offline;
+    const startElapsed = this.elapsed() - durationS;
+    try {
+      const res = await this.api.radioTransmit({
+        audio_base64: await blobToBase64(blob), mime_type: blob.type, duration_s: Math.round(durationS * 10) / 10,
+        operator_id: ORION_CONFIG.operatorId, started_at: startedIso, log: !sim,
+      });
+      if (!res.transcript) {
+        this.pushToast('info', 'Nothing understood', 'No speech was recognised in that transmission.');
+      } else {
+        if (sim && sim === this.offline) {
+          sim.logRadio(res.transcript, ORION_CONFIG.operatorId, {
+            duration_s: Math.round(durationS * 10) / 10, language: res.language, started_at: startedIso,
+            drones: res.drones, kind: res.kind,
+            transcribed_by: res.model, mission_time_s: Math.max(0, Math.round(startElapsed * 10) / 10),
+          });
+        } else if (!sim) {
+          this.pollLive();
+        }
+        this.pushToast('ok', 'Radio logged', `„${res.transcript}”`);
+      }
+    } catch (err) {
+      this.pushToast('warn', 'Transcription failed', radioError(err));
+    } finally {
+      this.radio.set('idle');
+    }
+  }
+
   clearCopilot(): void {
     this.copilot.set([]);
     this.highlightedEvents.set([]);
@@ -793,13 +1055,31 @@ export function summarise(e: AuditEvent): string {
   const d = parseDetails(e);
   const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : undefined);
   const drone = e.drone_id ? `Drone ${e.drone_id}: ` : '';
+  const said = pick('transcript');
+  if (said) return drone + `„${said}”` + (d['simulated'] ? ' (simulated)' : '');
   return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('assessment') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function radioError(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    if (err.status === 0) return `Transcription runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}.`;
+    if (typeof err.error?.detail === 'string') return err.error.detail;
+    return `Radio error (${err.status}).`;
+  }
+  return 'The transcript did not come back in time.';
 }
 
 function copilotError(err: unknown): string {
   if (err instanceof HttpErrorResponse) {
     if (err.status === 0) {
-      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and ANTHROPIC_API_KEY) to ask questions.`;
+      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and GEMINI_API_KEY) to ask questions.`;
     }
     if (typeof err.error?.detail === 'string') return err.error.detail;
     return `Copilot error (${err.status}).`;

@@ -4,6 +4,8 @@ import { computeMesh, describeMesh } from './mesh';
 import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
 import { HashChainLedger } from './hash-chain';
 import { DroneState, FleetUpdate, Recommendation, TrustStatus, WeatherKind, Zone } from './models';
+import { AdversaryMoveKind, AdversaryOptions } from './training';
+import { RadioKind, dronesIn } from './radio';
 
 /**
  * Plan B from the spec, extended into a fuller (simulated, defensive) conflict exercise over
@@ -39,6 +41,11 @@ const LINK_LOSS = { droneId: 5, durationS: 15, failsafeAfterS: 5 };
 const SCRIPT = { spoof: 30, recommend: 60, replay: 100, jammer: 112, linkLoss: 145, report: 160 };
 
 const DYNAMIC_ZONE_ID = 100;
+
+/** In training, how long ORION takes to notice an attack and put a decision to the operator. */
+const DETECTION_DELAY_S = 3;
+/** In training, at most this many drones are spoofed at once: pressure, not a wipe-out. */
+const MAX_SPOOFED = 2;
 
 // Where each weather kind enters the Demo theatre and how it drifts (m/s north, m/s east),
 // chosen so the storm crosses Sector 7 and the rain sits over the base and corridor.
@@ -118,6 +125,11 @@ export class OfflineSimulator {
   elapsed = 0;
   running = false;
   speed = 1;
+  /**
+   * The fixed 3-minute script. Off during AI training (core/training.ts): the adversary then
+   * stages the attacks through applyAdversaryMove() and ORION raises a decision for each one.
+   */
+  scripted = true;
 
   private drones: SimDrone[] = [];
   private zones: Zone[] = [];
@@ -126,6 +138,10 @@ export class OfflineSimulator {
   /** Drones on each sector's orbit at the last tick, by sector name. */
   private patrolMembers = new Map<string, Set<number>>();
   private jammer: Jammer | null = null;
+  /** Attacks ORION will turn into a recommendation once it has noticed them (training only). */
+  private detections: { droneId: number; at: number; trigger: string }[] = [];
+  /** Scripted radio chatter waiting to be "said" (exercise colour, marked simulated in the log). */
+  private radioCues: { at: number; speaker: string; text: string; kind: RadioKind }[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
   private commandSeq = 6;
@@ -153,6 +169,8 @@ export class OfflineSimulator {
     this.milestones.clear();
     this.recs = [];
     this.jammer = null;
+    this.detections = [];
+    this.radioCues = [];
     this.zones = structuredClone(INITIAL_ZONES);
     SECTORS.A.center = { lat: 44.335, lon: 23.83 };
     SECTORS.A.orbit = { lat: 0.003, lon: 0.004 };
@@ -187,12 +205,16 @@ export class OfflineSimulator {
   advance(dt: number): void {
     this.elapsed = Math.round((this.elapsed + dt) * 10) / 10;
 
-    if (this.elapsed >= SCRIPT.spoof) this.triggerSpoofing();
-    if (this.elapsed >= SCRIPT.recommend) this.issueRecommendation();
-    if (this.elapsed >= SCRIPT.replay) this.triggerReplay();
-    if (this.elapsed >= SCRIPT.jammer) this.triggerInterference();
-    if (this.elapsed >= SCRIPT.linkLoss) this.triggerLinkLoss();
-    if (this.elapsed >= SCRIPT.report) this.markReportReady();
+    if (this.scripted) {
+      if (this.elapsed >= SCRIPT.spoof) this.triggerSpoofing();
+      if (this.elapsed >= SCRIPT.recommend) this.issueRecommendation();
+      if (this.elapsed >= SCRIPT.replay) this.triggerReplay();
+      if (this.elapsed >= SCRIPT.jammer) this.triggerInterference();
+      if (this.elapsed >= SCRIPT.linkLoss) this.triggerLinkLoss();
+      if (this.elapsed >= SCRIPT.report) this.markReportReady();
+    }
+    this.raiseDetections();
+    this.playRadio();
 
     this.moveJammer(dt);
     this.driftWeather(dt);
@@ -509,6 +531,7 @@ export class OfflineSimulator {
     if (this.milestones.has('spoof')) return;
     this.milestones.add('spoof');
     this.drone(2).spoofedAt = this.elapsed;
+    this.saySpoofed(2);
     this.log('SPOOFING_ATTACK_INITIATED', 2, {
       attack_vector: 'GPS_SPOOFING_INJECTION', target: 'Drone 2',
       description: 'False ephemeris and sudden position jump injected',
@@ -540,6 +563,7 @@ export class OfflineSimulator {
       approved_at: null,
     };
     this.recs = [rec, ...this.recs];
+    this.sayLater(3, 'TOC', 'Am văzut recomandarea ORION pentru D2. Decizia e la operator, nu întârziați.', 'ORDER');
     this.log('RECOMMENDATION_ISSUED', 2, {
       recommendation_id: rec.id, blocked_action: rec.blocked_action,
       blocked_reason: rec.blocked_reason, recommended_action: rec.recommended_action,
@@ -550,6 +574,7 @@ export class OfflineSimulator {
   triggerReplay(): void {
     if (this.milestones.has('replay')) return;
     this.milestones.add('replay');
+    this.sayLater(2, 'OPERATOR_2', 'Comandă de întoarcere respinsă pentru D2, secvență veche. Cineva reia comenzi pe canal.');
     this.log('COMMAND_REPLAY_REJECTED', 2, {
       command: 'RETURN_TO_HOME', sequence: 5, age_s: 30,
       reason: 'Replay detected: sequence already consumed and timestamp expired',
@@ -575,10 +600,128 @@ export class OfflineSimulator {
     this.milestones.add('linkloss');
     d.linkLostAt = this.elapsed;
     d.failsafeDone = false;
+    this.sayLinkLost(d.id);
     this.log('COMMAND_LINK_LOST', d.id, {
       description: 'Command link jammed: no telemetry acknowledgements',
       failsafe_in_s: LINK_LOSS.failsafeAfterS,
     }, 'SIMULATOR');
+  }
+
+  // ---- AI training: what the adversary may do now, and doing it ---------------------------
+
+  /** The adversary's menu right now: only events this simulation can stage (core/training.ts). */
+  adversaryOptions(): AdversaryOptions {
+    const flying = this.drones.filter(d => d.mode !== 'LANDED' && !this.linkDown(d));
+    const weather = this.zones.filter(z => z.is_active && isWeather(z));
+    const available: AdversaryMoveKind[] = ['REPLAY'];
+    const spoofed = this.drones.filter(d => d.spoofedAt !== null).length;
+    const eligible: AdversaryOptions['eligible'] = {
+      SPOOF: spoofed >= MAX_SPOOFED ? [] : flying.filter(d => d.spoofedAt === null).map(d => d.id),
+      LINK_LOSS: flying.map(d => d.id),
+    };
+    if (eligible.SPOOF.length) available.push('SPOOF');
+    if (eligible.LINK_LOSS.length) available.push('LINK_LOSS');
+    if (!this.jammer || this.jammer.leg >= JAMMER.path.length - 1) available.push('JAMMER');
+    if (weather.length < 2) {
+      for (const kind of ['STORM', 'WIND', 'RAIN'] as const) {
+        if (!weather.some(z => z.weather === kind)) available.push(kind);
+      }
+    }
+    return { available, eligible };
+  }
+
+  /** Stages one adversary move; false when it isn't possible right now (then nothing happens). */
+  applyAdversaryMove(move: AdversaryMoveKind, target: number | null, by = 'AI_ADVERSARY'): boolean {
+    const options = this.adversaryOptions();
+    if (move === 'WAIT') return true;
+    if (!options.available.includes(move)) return false;
+    if (move === 'SPOOF') {
+      if (target === null || !options.eligible.SPOOF.includes(target)) return false;
+      this.drone(target).spoofedAt = this.elapsed;
+      this.saySpoofed(target);
+      this.log('SPOOFING_ATTACK_INITIATED', target, {
+        attack_vector: 'GPS_SPOOFING_INJECTION', target: `Drone ${target}`,
+        description: 'False ephemeris and sudden position jump injected',
+      }, by);
+      this.detections.push({ droneId: target, at: this.elapsed + DETECTION_DELAY_S, trigger: 'SPOOFING_ATTACK_DETECTED' });
+    } else if (move === 'LINK_LOSS') {
+      if (target === null || !options.eligible.LINK_LOSS.includes(target)) return false;
+      const d = this.drone(target);
+      d.linkLostAt = this.elapsed;
+      d.failsafeDone = false;
+      this.sayLinkLost(d.id);
+      this.log('COMMAND_LINK_LOST', d.id, {
+        description: 'Command link jammed: no telemetry acknowledgements', failsafe_in_s: LINK_LOSS.failsafeAfterS,
+      }, by);
+    } else if (move === 'JAMMER') {
+      const [lat, lon] = JAMMER.path[0];
+      this.jammer = { lat, lon, leg: 0 };
+      this.milestones.delete('single-fault');
+      this.log('EW_EMITTER_ACTIVE', null, {
+        description: 'Simulated hostile mobile jammer starts transmitting south-east of Sector 4',
+      }, by);
+    } else if (move === 'REPLAY') {
+      const victims = this.drones.filter(d => d.mode !== 'LANDED');
+      const victim = victims[Math.floor(this.elapsed) % victims.length] ?? this.drones[0];
+      this.log('COMMAND_REPLAY_REJECTED', victim.id, {
+        command: 'RETURN_TO_HOME', sequence: Math.max(1, this.commandSeq - 3), age_s: 30,
+        reason: 'Replay detected: sequence already consumed and timestamp expired',
+        signature: 'fabricated_or_replayed_signature_deadbeef1234',
+      }, by);
+    } else {
+      this.triggerWeather(move);
+    }
+    this.emit();
+    return true;
+  }
+
+  /** Turns attacks ORION has now noticed into decisions for the operator (training only). */
+  private raiseDetections(): void {
+    if (!this.detections.length) return;
+    const due = this.detections.filter(x => this.elapsed >= x.at);
+    this.detections = this.detections.filter(x => this.elapsed < x.at);
+    for (const { droneId, trigger } of due) {
+      const d = this.drone(droneId);
+      const stillHit = trigger === 'SPOOFING_ATTACK_DETECTED' ? d.spoofedAt !== null : d.jammedAt !== null;
+      if (d.mode !== 'LANDED' && stillHit && !this.linkDown(d)) this.recommendFor(droneId, trigger);
+    }
+  }
+
+  // ---- radio log ---------------------------------------------------------------------------
+
+  /** A transcribed push-to-talk transmission, timed from when the mic was keyed. */
+  logRadio(transcript: string, speaker: string, details: Record<string, unknown> & { duration_s: number; drones?: number[] }): void {
+    const drones = details.drones ?? dronesIn(transcript);
+    this.log('RADIO_TRANSMISSION', drones.length === 1 ? drones[0] : null, {
+      transcript, channel: 'COMMAND_NET',
+      mission_time_s: Math.max(0, Math.round((this.elapsed - details.duration_s) * 10) / 10),
+      ...details, drones,
+    }, speaker);
+  }
+
+  private sayLater(delayS: number, speaker: string, text: string, kind: RadioKind = 'REPORT'): void {
+    this.radioCues.push({ at: this.elapsed + delayS, speaker, text, kind });
+  }
+
+  private playRadio(): void {
+    if (!this.radioCues.length) return;
+    const due = this.radioCues.filter(c => this.elapsed >= c.at);
+    this.radioCues = this.radioCues.filter(c => this.elapsed < c.at);
+    for (const c of due) {
+      const drones = dronesIn(c.text);
+      this.log('RADIO_TRANSMISSION', drones.length === 1 ? drones[0] : null, {
+        transcript: c.text, channel: 'COMMAND_NET', simulated: true, drones, kind: c.kind,
+        duration_s: Math.max(2, Math.round(c.text.length / 14)),
+      }, c.speaker);
+    }
+  }
+
+  private saySpoofed(droneId: number): void {
+    this.sayLater(4, 'OPERATOR_2', `Atenție, D${droneId} a sărit pe hartă cu vreo 500 de metri. Nu e real, verific poziția.`);
+  }
+
+  private sayLinkLost(droneId: number): void {
+    this.sayLater(2, 'TOC', `D${droneId} nu mai răspunde la comenzi. Lăsăm failsafe-ul să lucreze, nu forțăm.`, 'ORDER');
   }
 
   markReportReady(): void {
@@ -805,7 +948,10 @@ export class OfflineSimulator {
     const affected: SimDrone[] = [];
     for (const d of this.drones) {
       const inRange = !!j && d.mode !== 'LANDED' && distanceM(d.lat, d.lon, j.lat, j.lon) <= JAMMER.radiusM;
-      if (inRange && d.jammedAt === null) d.jammedAt = this.elapsed;
+      if (inRange && d.jammedAt === null) {
+        d.jammedAt = this.elapsed;
+        if (!this.scripted) this.detections.push({ droneId: d.id, at: this.elapsed + DETECTION_DELAY_S, trigger: 'GPS_JAMMED' });
+      }
       if (!inRange && d.jammedAt !== null) {
         d.jammedAt = null;
         this.log('GPS_RESTORED', d.id, { description: 'Satellite fix reacquired' });
@@ -844,6 +990,9 @@ export class OfflineSimulator {
       geometry_type: 'CIRCLE', center: [lat, lon], radius_m: radius, is_active: true, detected_by: 'ORION_CONSENSUS',
     }];
     const affectedIds = affected.map(d => d.id);
+    const names = affectedIds.map(i => 'D' + i);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} și ${names.at(-1)}` : names[0];
+    this.sayLater(2, 'OPERATOR_2', `Pierd GPS pe ${list} deodată, în ${affected[0].sector.name}. Pare bruiaj mobil, nu defect de dronă.`);
     const reallocatedTo = this.drones
       .filter(d => !affectedIds.includes(d.id) && d.spoofedAt === null && d.mode !== 'LANDED')
       .map(d => d.id);
@@ -874,6 +1023,8 @@ export class OfflineSimulator {
         this.log('COMMAND_LINK_RESTORED', d.id, {
           description: 'Link back. Drone keeps its failsafe action until the operator decides',
         });
+        this.sayLater(1, 'OPERATOR_2', `D${d.id} e din nou pe legătură. Păstrează acțiunea de failsafe până decidem.`);
+        if (!this.scripted && d.mode === 'LOITER') this.recommendFor(d.id, 'COMMAND_LINK_RESTORED');
       }
     }
   }
@@ -1134,7 +1285,7 @@ export class OfflineSimulator {
   }
 
   private log(type: string, droneId: number | null, details: Record<string, unknown>, operator = 'SYSTEM'): void {
-    const withTime = { ...details, mission_time_s: this.elapsed };
+    const withTime = { mission_time_s: this.elapsed, ...details };
     this.ledger.append(type, droneId, withTime, operator).then(() => this.cb.onLedger());
   }
 

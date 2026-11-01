@@ -35,6 +35,16 @@ const GRID_STYLE: StyleSpecification = {
 
 export type Basemap = 'real' | 'grid';
 
+// 3D view: terrain from the public AWS Terrain Tiles (Terrarium PNG, no API key). The plain
+// around Craiova is flat (60-200 m) and drones fly 120-150 m up, so heights are exaggerated;
+// terrain and drones use the same factor, so what's above what stays true.
+const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const DEM_ATTRIBUTION = 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/" target="_blank" rel="noopener">Mapzen/AWS Terrain Tiles</a>';
+export const VERTICAL_EXAGGERATION = 4;
+const PITCH_3D = 62;
+/** Airspace volumes drawn over threat-type zones in 3D, metres above ground (before exaggeration). */
+const VOLUME_TOP_M = 220;
+
 // Base in the south-west, patrol sectors and threat zone in the north-east.
 const THEATRE_BOUNDS: [[number, number], [number, number]] = [[23.794, 44.312], [23.866, 44.354]];
 
@@ -52,6 +62,8 @@ export class TheatreMap implements OnDestroy {
   private host = viewChild.required<ElementRef<HTMLDivElement>>('map');
   private map: MlMap | null = null;
   protected basemap = signal<Basemap>('grid');
+  protected view3d = signal(this.saved3d());
+  protected readonly exaggeration = VERTICAL_EXAGGERATION;
   private ready = false;
   private resizeObserver: ResizeObserver | null = null;
   private droneMarkers = new Map<number, Marker>();
@@ -77,6 +89,7 @@ export class TheatreMap implements OnDestroy {
       const drones = this.store.drones();
       const zones = this.store.zones();
       const selected = this.store.selectedDroneId();
+      this.store.radioBubbles(); // a new radio mention redraws the markers right away
       if (this.ready) this.renderDrones(drones, zones, selected);
     });
 
@@ -84,6 +97,73 @@ export class TheatreMap implements OnDestroy {
       const pt = this.store.pickedLoiterPoint();
       if (this.ready) this.renderLoiterTarget(pt);
     });
+  }
+
+  protected toggle3d(): void {
+    const on = !this.view3d();
+    this.view3d.set(on);
+    try { localStorage.setItem('orion.map3d', String(on)); } catch { /* storage unavailable */ }
+    // While a basemap style is loading, addOverlays() applies the view once it's ready.
+    if (!this.ready) return;
+    this.apply3d(true);
+    this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
+  }
+
+  private saved3d(): boolean {
+    try { return localStorage.getItem('orion.map3d') === 'true'; } catch { return false; }
+  }
+
+  /** Terrain, camera tilt and rotation for the current view; layers are only shown in 3D. */
+  private apply3d(animate: boolean): void {
+    const map = this.map;
+    if (!map) return;
+    const on = this.view3d();
+    try {
+      for (const id of ['hillshade', 'drone-stalks', 'drone-pucks', 'zones-volume']) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+      }
+      map.setTerrain(on ? { source: 'dem', exaggeration: VERTICAL_EXAGGERATION } : null);
+    } catch {
+      // Style still loading (a basemap switch in flight): try again once the map settles.
+      map.once('idle', () => this.apply3d(false));
+      return;
+    }
+    if (on) {
+      map.dragRotate.enable();
+      map.touchZoomRotate.enableRotation();
+    } else {
+      map.dragRotate.disable();
+      map.touchZoomRotate.disableRotation();
+    }
+    const camera = { pitch: on ? PITCH_3D : 0, bearing: on ? -20 : 0 };
+    if (animate) map.easeTo({ ...camera, duration: 900 });
+    else map.jumpTo(camera);
+  }
+
+  /**
+   * HTML markers sit on the terrain; in 3D, lift each drone's marker to its altitude. The point
+   * at altitude is projected with the map's own camera, by giving locationToScreenPoint a
+   * terrain that reports ground elevation plus the drone's (exaggerated) altitude.
+   */
+  private liftMarkers(): void {
+    const map = this.map;
+    if (!map) return;
+    const terrain = this.view3d() ? map.terrain : null;
+    for (const d of this.store.drones()) {
+      const marker = this.droneMarkers.get(d.drone_id);
+      if (!marker) continue;
+      if (!terrain || d.altitude <= 0) {
+        marker.setOffset([0, 0]);
+        continue;
+      }
+      const ll = new maplibregl.LngLat(d.longitude, d.latitude);
+      const groundM = terrain.getElevationForLngLat(ll, map.transform);
+      const airM = groundM + d.altitude * VERTICAL_EXAGGERATION;
+      const atAltitude = { getElevationForLngLat: () => airM, getElevationForLngLatZoom: () => airM } as unknown as typeof terrain;
+      const ground = map.transform.locationToScreenPoint(ll, terrain);
+      const air = map.transform.locationToScreenPoint(ll, atAltitude);
+      marker.setOffset([air.x - ground.x, air.y - ground.y]);
+    }
   }
 
   ngOnDestroy(): void {
@@ -101,7 +181,8 @@ export class TheatreMap implements OnDestroy {
   }
 
   protected recenter(): void {
-    this.map?.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(), duration: 600 });
+    const on = this.view3d();
+    this.map?.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(), duration: 600, pitch: on ? PITCH_3D : 0, bearing: on ? -20 : 0 });
   }
 
   protected setBasemap(kind: Basemap): void {
@@ -133,7 +214,7 @@ export class TheatreMap implements OnDestroy {
       style: GRID_STYLE,
       attributionControl: { compact: true },
       dragRotate: false,
-      pitchWithRotate: false,
+      maxPitch: 75,
       bounds: THEATRE_BOUNDS,
       fitBoundsOptions: { padding: 40 },
     });
@@ -146,12 +227,13 @@ export class TheatreMap implements OnDestroy {
       if (!userMoved) map.fitBounds(THEATRE_BOUNDS, { padding: this.fitPadding(), duration: 0 });
     });
     this.resizeObserver.observe(this.host().nativeElement);
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
     this.setupInteractions(map);
 
     // Overlays are wiped by every setStyle, so they are (re)added on each style load.
     map.on('style.load', () => this.addOverlays());
+    map.on('move', () => this.liftMarkers());
     this.applyBasemap(this.savedBasemap());
   }
 
@@ -162,6 +244,20 @@ export class TheatreMap implements OnDestroy {
     map.addLayer({
       id: 'grid', type: 'line', source: 'grid',
       paint: { 'line-color': real ? '#5cc8ff' : '#1a2633', 'line-width': 1, 'line-opacity': real ? 0.07 : 1 },
+    });
+
+    // Separate DEM sources for terrain and hillshade, as MapLibre recommends.
+    const dem = { type: 'raster-dem' as const, tiles: [DEM_TILES], tileSize: 256, maxzoom: 15, encoding: 'terrarium' as const };
+    map.addSource('dem', { ...dem, attribution: DEM_ATTRIBUTION });
+    map.addSource('dem-shade', dem);
+    map.addLayer({
+      id: 'hillshade', type: 'hillshade', source: 'dem-shade', layout: { visibility: 'none' },
+      paint: {
+        'hillshade-exaggeration': 0.55,
+        'hillshade-shadow-color': '#05080c',
+        'hillshade-highlight-color': real ? '#3a5068' : '#2a3a4c',
+        'hillshade-accent-color': '#0b1219',
+      },
     });
 
     map.addSource('zones', { type: 'geojson', data: empty() });
@@ -195,6 +291,18 @@ export class TheatreMap implements OnDestroy {
       id: 'objective-line-core', type: 'line', source: 'zones',
       filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'zone_type'], 'OBJECTIVE']],
       paint: { 'line-color': ZONE_COLORS['OBJECTIVE'], 'line-width': 2.5, 'line-dasharray': [4, 3] },
+    });
+
+    // Airspace volumes over threat, interference and weather zones (3D only).
+    map.addLayer({
+      id: 'zones-volume', type: 'fill-extrusion', source: 'zones', layout: { visibility: 'none' },
+      filter: ['all', ['==', ['geometry-type'], 'Polygon'], ['in', ['get', 'zone_type'], ['literal', ['THREAT', 'INTERFERENCE', 'WEATHER']]], ['!=', ['get', 'is_core'], true]],
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-height': VOLUME_TOP_M * VERTICAL_EXAGGERATION,
+        'fill-extrusion-base': 0,
+        'fill-extrusion-opacity': 0.13,
+      },
     });
 
     map.addSource('uncertainty', { type: 'geojson', data: empty() });
@@ -234,6 +342,29 @@ export class TheatreMap implements OnDestroy {
     map.addLayer({
       id: 'trails', type: 'line', source: 'trails',
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
+    });
+
+    // Drones in 3D: a thin stalk from the ground and a puck at flight altitude (exaggerated like the terrain).
+    map.addSource('drones-3d', { type: 'geojson', data: empty() });
+    map.addLayer({
+      id: 'drone-stalks', type: 'fill-extrusion', source: 'drones-3d', layout: { visibility: 'none' },
+      filter: ['==', ['get', 'part'], 'stalk'],
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-base': 0,
+        'fill-extrusion-height': ['get', 'top'],
+        'fill-extrusion-opacity': 0.55,
+      },
+    });
+    map.addLayer({
+      id: 'drone-pucks', type: 'fill-extrusion', source: 'drones-3d', layout: { visibility: 'none' },
+      filter: ['==', ['get', 'part'], 'puck'],
+      paint: {
+        'fill-extrusion-color': ['get', 'color'],
+        'fill-extrusion-base': ['get', 'base'],
+        'fill-extrusion-height': ['get', 'top'],
+        'fill-extrusion-opacity': 0.9,
+      },
     });
 
     map.addSource('preview-zone', { type: 'geojson', data: empty() });
@@ -319,6 +450,7 @@ export class TheatreMap implements OnDestroy {
     });
 
     this.ready = true;
+    this.apply3d(false);
     this.renderZones(this.store.zones());
     this.renderDrones(this.store.drones(), this.store.zones(), this.store.selectedDroneId());
   }
@@ -531,6 +663,7 @@ export class TheatreMap implements OnDestroy {
 
     this.updateTrails(drones);
     this.updateMesh(drones);
+    this.update3dDrones(drones);
 
     const seen = new Set<number>();
     for (const d of drones) {
@@ -555,12 +688,33 @@ export class TheatreMap implements OnDestroy {
       el.classList.toggle('selected', d.drone_id === selected);
       el.classList.toggle('landed', !d.is_armed);
       el.setAttribute('aria-label', `Drone ${d.drone_id}, trust ${Math.round(d.trust_score)}`);
-      el.innerHTML = `<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}</span>`;
+      const alt = this.view3d() && d.is_armed ? ` · ${Math.round(d.altitude)} m` : '';
+      const said = this.store.radioBubbles()[d.drone_id];
+      el.classList.toggle('talking', !!said);
+      const bubble = said ? `<span class="bubble"><b>${escapeHtml(said.speaker)}</b>„${escapeHtml(said.text)}”</span>` : '';
+      el.innerHTML = `${bubble}<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}${alt}</span>`;
       marker.setLngLat([d.longitude, d.latitude]);
     }
     for (const [id, m] of this.droneMarkers) {
       if (!seen.has(id)) { m.remove(); this.droneMarkers.delete(id); }
     }
+    this.liftMarkers();
+  }
+
+  private update3dDrones(drones: DroneState[]): void {
+    const features: Feature[] = [];
+    if (this.view3d()) {
+      for (const d of drones) {
+        if (!d.is_armed || d.altitude <= 0) continue;
+        const top = d.altitude * VERTICAL_EXAGGERATION;
+        const color = STATUS_COLORS[d.trust_status];
+        features.push(
+          { type: 'Feature', properties: { part: 'stalk', color, top }, geometry: { type: 'Polygon', coordinates: [circleRing(d.latitude, d.longitude, 4, 8)] } },
+          { type: 'Feature', properties: { part: 'puck', color, base: top - 10, top: top + 10 }, geometry: { type: 'Polygon', coordinates: [circleRing(d.latitude, d.longitude, 24, 16)] } },
+        );
+      }
+    }
+    (this.map!.getSource('drones-3d') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
   }
 
   private trails = new Map<number, [number, number][]>();

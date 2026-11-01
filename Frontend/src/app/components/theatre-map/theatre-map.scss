@@ -197,7 +197,62 @@
     &.landed {
       opacity: 0.6;
     }
+
+    // Mentioned on the radio: a violet flash and the line in a bubble above the drone.
+    &.talking {
+      z-index: 20; // above the zone labels (10)
+
+      .glyph {
+        animation: radio-flash 0.7s ease-in-out 4;
+      }
+    }
+
+    .bubble {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 220px;
+      padding: 5px 8px;
+      border: 1px solid var(--violet);
+      border-radius: 6px;
+      background: rgba(20, 16, 34, 0.95);
+      color: var(--text);
+      font: 500 11.5px/1.35 var(--sans);
+      font-style: italic;
+      text-align: left;
+      white-space: normal;
+      pointer-events: none;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+
+      b {
+        display: block;
+        margin-bottom: 1px;
+        font: 600 9.5px/1.2 var(--mono);
+        font-style: normal;
+        color: var(--violet);
+      }
+
+      &::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border: 5px solid transparent;
+        border-top-color: var(--violet);
+      }
+    }
   }
+
+  @keyframes radio-flash {
+    50% {
+      box-shadow: 0 0 0 4px rgba(180, 140, 255, 0.9), 0 0 18px 6px rgba(180, 140, 255, 0.6);
+      border-color: #b48cff;
+    }
+  }
+
 
   .zone-label {
     display: flex;
