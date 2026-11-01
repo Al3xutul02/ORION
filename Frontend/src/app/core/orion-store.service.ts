@@ -9,6 +9,12 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
 import { RadioEntry, radioEntry } from './radio';
+import { RlPolicy, pickRlMove } from './rl-adversary';
+import policyJson from './adversary-policy.json';
+
+/** Trained offline by scripts/train-adversary.ts (npm run train:adversary). */
+const RL_POLICY = policyJson as RlPolicy;
+export type AdversaryChoice = 'RL' | 'GEMINI';
 import {
   AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
   scoreSession, seededRandom,
@@ -46,8 +52,8 @@ export interface TrainingSession {
   lengthS: number;
   nextMoveAt: number;
   requesting: boolean;
-  /** Who plays the adversary: Gemini on the backend, or the local rules once that failed. */
-  adversary: 'AI' | 'LOCAL';
+  /** Who plays the adversary: the trained RL policy, Gemini on the backend, or the local rules once Gemini failed. */
+  adversary: 'RL' | 'AI' | 'LOCAL';
   moves: AdversaryMove[];
   redSeconds: Record<number, number>;
   lastElapsed: number;
@@ -114,6 +120,8 @@ export class OrionStore implements OnDestroy {
   readonly mapMode = signal<MapMode>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
   readonly training = signal<TrainingSession | null>(null);
+  /** Who plays the opposing force in AI training; remembered. */
+  readonly adversaryChoice = signal<AdversaryChoice>(this.savedAdversary());
   /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
   readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
   readonly radioSeconds = signal(0);
@@ -340,7 +348,7 @@ export class OrionStore implements OnDestroy {
     this.offline.scripted = false;
     this.training.set({
       phase: 'running', startedAt: this.elapsed(), lengthS: SESSION_LENGTH_S, nextMoveAt: this.elapsed() + FIRST_MOVE_AT_S,
-      requesting: false, adversary: 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
+      requesting: false, adversary: this.adversaryChoice() === 'RL' ? 'RL' : 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
     });
     await this.start();
   }
@@ -412,7 +420,15 @@ export class OrionStore implements OnDestroy {
     });
 
     let move: AdversaryMove | null = null;
-    if (t.adversary === 'AI') {
+    if (t.adversary === 'RL') {
+      move = pickRlMove(RL_POLICY, {
+        pending: pending.length,
+        red: this.drones().filter(d => d.trust_status === 'RED').length,
+        jammerActive: !options.available.includes('JAMMER'),
+        t: now - t.startedAt,
+        lastMove: t.moves.at(-1)?.move ?? null,
+      }, options, seededRandom(Math.round(now * 1000) + t.moves.length * 7919));
+    } else if (t.adversary === 'AI') {
       try {
         const res = await this.api.trainingMove({
           elapsed_s: Math.round(now - t.startedAt), remaining_s: Math.round(t.lengthS - (now - t.startedAt)),
@@ -443,7 +459,7 @@ export class OrionStore implements OnDestroy {
     this.training.set({
       ...current,
       requesting: false,
-      adversary: move.source === 'AI' ? 'AI' : 'LOCAL',
+      adversary: move.source === 'LOCAL' && current.adversary === 'AI' ? 'LOCAL' : current.adversary,
       moves: [...current.moves, { ...move, at_s: Math.round(this.elapsed() - current.startedAt) }],
       nextMoveAt: this.elapsed() + move.wait_s,
     });
@@ -1035,6 +1051,15 @@ export class OrionStore implements OnDestroy {
     } catch {
       return 18;
     }
+  }
+
+  setAdversaryChoice(choice: AdversaryChoice): void {
+    this.adversaryChoice.set(choice);
+    try { localStorage.setItem('orion.adversary', choice); } catch { /* storage unavailable */ }
+  }
+
+  private savedAdversary(): AdversaryChoice {
+    try { return localStorage.getItem('orion.adversary') === 'GEMINI' ? 'GEMINI' : 'RL'; } catch { return 'RL'; }
   }
 
   private savedMuted(): boolean {

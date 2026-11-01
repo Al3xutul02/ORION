@@ -746,6 +746,10 @@ export class OfflineSimulator {
     }
 
     this.log('OPERATOR_APPROVAL', rec.drone_id, { recommendation_id: rec.id, action: rec.recommended_action }, operatorId);
+    if (rec.trigger_event === 'PATROL_ZONE_JAMMED') {
+      // Its drone_id is the patrol zone's id: the approval is a zone tactic, not a drone command.
+      return this.executeZoneTactic(rec.drone_id, rec.recommended_action, operatorId);
+    }
     const seq = this.dispatch(rec.drone_id, rec.recommended_action, operatorId);
     return { ok: true, message: `Signed ${rec.recommended_action} dispatched (seq ${seq}).` };
   }

@@ -2,6 +2,7 @@
   "name": "frontend",
   "version": "0.0.0",
   "scripts": {
+    "train:adversary": "esbuild scripts/train-adversary.ts --bundle --platform=node --format=esm --log-level=warning --outfile=.train/train-adversary.mjs && node .train/train-adversary.mjs",
     "ng": "ng",
     "start": "ng serve",
     "build": "ng build",

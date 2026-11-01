@@ -84,7 +84,7 @@
       <span class="live-sub">
         @switch (t.phase) {
           @case ('running') {
-            {{ trainingRemaining() }} left &middot; adversary: {{ t.adversary === 'AI' ? 'Gemini' : 'local rules' }}
+            {{ trainingRemaining() }} left &middot; adversary: {{ t.adversary === 'RL' ? 'RL policy' : t.adversary === 'AI' ? 'Gemini' : 'local rules' }}
             &middot; {{ t.moves.length }} {{ t.moves.length === 1 ? 'attack' : 'attacks' }} so far
             &middot; {{ store.pendingRecommendations().length }} pending {{ store.pendingRecommendations().length === 1 ? 'decision' : 'decisions' }}
             @if (t.requesting) { &middot; <em>the adversary is choosing...</em> }
@@ -108,7 +108,11 @@
       }
     </div>
     <div class="inject">
-      <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary (Gemini, or local rules offline) attacks for 3 minutes; you get a scored debrief">&#127919; AI training</button>
+      <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary attacks for 3 minutes (mostly GPS spoofing and jamming); you get a scored debrief">&#127919; AI training</button>
+      <div class="adv" role="group" aria-label="Training adversary">
+        <button type="button" [class.on]="store.adversaryChoice() === 'RL'" (click)="store.setAdversaryChoice('RL')" title="Q-learning policy trained on thousands of simulated sessions; works offline">RL</button>
+        <button type="button" [class.on]="store.adversaryChoice() === 'GEMINI'" (click)="store.setAdversaryChoice('GEMINI')" title="Gemini picks each attack (needs the backend and internet)">Gemini</button>
+      </div>
       <span class="hint">Demo toys:</span>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>

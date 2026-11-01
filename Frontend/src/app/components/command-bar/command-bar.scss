@@ -201,6 +201,29 @@
   50% { opacity: 0.2; }
 }
 
+.adv {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+
+  button {
+    padding: 2px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+
+    &.on {
+      background: rgba(180, 140, 255, 0.18);
+      color: var(--violet);
+      font-weight: 600;
+    }
+  }
+}
+
 .live-banner.training {
   .live-title { color: var(--violet); }
   .btn { margin-left: auto; }
