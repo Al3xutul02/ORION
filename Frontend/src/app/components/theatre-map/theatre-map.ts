@@ -705,6 +705,12 @@ export class TheatreMap implements OnDestroy {
           ev.stopPropagation();
           this.store.selectDrone(d.drone_id);
         });
+        // A click only selects; a double-click opens the details (and must not zoom the map).
+        el.addEventListener('dblclick', ev => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          this.store.openDetails(d.drone_id);
+        });
         marker = new maplibregl.Marker({ element: el, anchor: 'center' }).setLngLat([d.longitude, d.latitude]).addTo(map);
         this.droneMarkers.set(d.drone_id, marker);
       }

@@ -66,7 +66,7 @@ describe('mesh in the Demo simulator', () => {
   it('outvotes spoofed D2 through its Sector 4 neighbours', () => {
     let last: DroneState[] = [];
     const sim = new OfflineSimulator({ onFleet: u => (last = u.drones), onLedger: () => {}, onRecommendations: () => {} });
-    sim.triggerSpoofing();
+    sim.applyAdversaryMove('SPOOF', 2);
     sim.advance(0.5);
     const d2 = last.find(d => d.drone_id === 2)!;
     expect(d2.mesh!.status).toBe('OUTLIER');

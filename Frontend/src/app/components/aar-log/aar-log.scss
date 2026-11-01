@@ -6,11 +6,17 @@
 
 .panel {
   height: 100%;
+  container-type: inline-size;
+}
+
+// A narrow log keeps its header on one line with short labels.
+@container (max-width: 520px) {
+  .panel-head .long {
+    display: none;
+  }
 }
 
 .panel-head {
-  flex-wrap: wrap;
-
   a.btn {
     text-decoration: none;
   }

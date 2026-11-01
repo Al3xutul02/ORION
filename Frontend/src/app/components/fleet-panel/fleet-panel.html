@@ -23,7 +23,9 @@
         type="button"
         class="card status-{{ d.trust_status }}"
         [class.selected]="store.selectedDroneId() === d.drone_id"
-        (click)="store.openDetails(d.drone_id)"
+        (click)="store.selectDrone(d.drone_id)"
+        (dblclick)="store.openDetails(d.drone_id)"
+        title="Click to select, double-click for details"
       >
         <div class="top">
           <div class="score mono" [attr.aria-label]="'Trust score ' + (d.trust_score | number: '1.0-0')">

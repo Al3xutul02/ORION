@@ -67,7 +67,7 @@
             <li>
               <span class="mono">T+{{ m.at_s }}s</span>
               <strong>{{ moveLabel[m.move] }}{{ m.target_drone ? ' · D' + m.target_drone : '' }}</strong>
-              <span class="tag">{{ m.source === 'AI' ? 'Gemini' : 'local' }}</span>
+              <span class="tag">{{ m.source === 'AI' ? 'Gemini' : m.source === 'RL' ? 'RL' : 'local' }}</span>
               <span class="why">{{ m.reason }}</span>
             </li>
           } @empty {

@@ -21,7 +21,7 @@ export interface AdversaryMove {
   wait_s: number;
   /** For the instructor: hidden from the operator until the debrief. */
   reason: string;
-  source: 'AI' | 'LOCAL';
+  source: 'AI' | 'RL' | 'LOCAL';
   at_s?: number;
 }
 

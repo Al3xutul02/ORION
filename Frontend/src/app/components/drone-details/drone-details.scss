@@ -2,7 +2,7 @@
   position: absolute;
   top: 10px;
   left: 10px;
-  z-index: 6; // above the legend, which it may cover while open
+  z-index: 25; // above the legend, zone labels (10) and radio bubbles (20) it may cover while open
   width: min(340px, calc(100% - 20px));
   max-height: calc(100% - 20px);
   display: flex;
