@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -23,6 +23,9 @@ class TelemetryBase(BaseModel):
     noise: float = 15.0
     flight_mode: str = "GUIDED"
     is_armed: bool = True
+    patrol_zone_id: Optional[int] = None
+    target_waypoints: Optional[List[List[float]]] = None
+    eta_s: Optional[int] = None
 
 
 class TelemetryCreate(TelemetryBase):

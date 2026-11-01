@@ -4,7 +4,7 @@ import {
 import maplibregl, { GeoJSONSource, Map as MlMap, Marker, StyleSpecification } from 'maplibre-gl';
 import type { Feature, FeatureCollection } from 'geojson';
 import { circleRing, distanceM, egressPaths, evaluateActions, orderPolygonVertices, weatherPolygon } from '../../core/geo';
-import { DroneState, Zone } from '../../core/models';
+import { DroneState, MapMode, Zone } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
 import { DroneDetails } from '../drone-details/drone-details';
 import { describeWeather } from '../../core/platform';
@@ -74,6 +74,15 @@ export class TheatreMap implements OnDestroy {
   readonly corridorPoints = signal<[number, number][]>([]);
   readonly objectivePoints = signal<[number, number][]>([]);
   readonly threatPoints = signal<[number, number][]>([]);
+  protected movingZone = computed(() => {
+    const id = this.store.movingZoneId();
+    if (id !== null) {
+      const z = this.store.zones().find(zone => zone.id === id && zone.zone_type === 'PATROL' && zone.is_active);
+      if (z) return z;
+    }
+    const pzs = this.store.zones().filter(zone => zone.zone_type === 'PATROL' && zone.is_active);
+    return pzs[0] ?? null;
+  });
 
   constructor() {
     afterNextRender(() => this.init());
@@ -593,19 +602,20 @@ export class TheatreMap implements OnDestroy {
       }
 
       seen.add(z.id);
-      const existing = this.zoneLabels.get(z.id);
-      if (existing) {
-        existing.setLngLat(anchorLngLat);
-        existing.setOffset(offset);
-        const el = existing.getElement();
-        if (z.zone_type === 'PATROL') {
-          el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
-        }
-        continue;
+      let marker = this.zoneLabels.get(z.id);
+      if (!marker) {
+        const el = document.createElement('div');
+        marker = new maplibregl.Marker({ element: el, anchor: anchorPos, offset })
+          .setLngLat(anchorLngLat)
+          .addTo(map);
+        this.zoneLabels.set(z.id, marker);
       }
-      const el = document.createElement('div');
+      marker.setLngLat(anchorLngLat);
+      marker.setOffset(offset);
+      const el = marker.getElement();
       el.className = `zone-label zone-${z.zone_type}`;
-      if (z.zone_type === 'PATROL') {
+      if (z.zone_type === 'PATROL' || z.name.toUpperCase().includes('PATROL')) {
+        el.className = 'zone-label zone-PATROL';
         el.innerHTML = `<span class="patrol-icon">&#8853;</span><span>${escapeHtml(z.name)}</span>`;
       } else if (z.zone_type === 'OBJECTIVE') {
         el.innerHTML = `<span class="objective-icon">&#9670;</span><span class="objective-name">${escapeHtml(z.name)}</span>`;
@@ -613,10 +623,6 @@ export class TheatreMap implements OnDestroy {
         const sub = z.zone_type === 'WEATHER' ? describeWeather(z) : (z.zone_type === 'INTERFERENCE' && z.detected_by === 'ORION_CONSENSUS') ? 'detected by ORION' : '';
         el.innerHTML = `<span>${escapeHtml(z.name)}</span>${sub ? `<em>${escapeHtml(sub)}</em>` : ''}`;
       }
-      const marker = new maplibregl.Marker({ element: el, anchor: anchorPos, offset })
-        .setLngLat(anchorLngLat)
-        .addTo(map);
-      this.zoneLabels.set(z.id, marker);
     }
     for (const [id, m] of this.zoneLabels) {
       if (!seen.has(id)) { m.remove(); this.zoneLabels.delete(id); }
@@ -659,6 +665,28 @@ export class TheatreMap implements OnDestroy {
         });
       }
     }
+
+    // Trajectory flight lines for ANY drone that is moving towards a destination
+    for (const d of drones) {
+      if (!d.is_armed || d.flight_mode === 'LANDED') continue;
+      if (d.target_waypoints && d.target_waypoints.length > 0) {
+        const coords: [number, number][] = [[d.longitude, d.latitude]];
+        for (const wp of d.target_waypoints) {
+          coords.push([wp[1], wp[0]]);
+        }
+        pathFeatures.push({
+          type: 'Feature',
+          properties: {
+            kind: 'route',
+            color: d.drone_id === selected ? '#00e5ff' : '#38bdf8',
+          },
+          geometry: {
+            type: 'LineString',
+            coordinates: coords,
+          },
+        });
+      }
+    }
     (map.getSource('paths') as GeoJSONSource).setData({ type: 'FeatureCollection', features: pathFeatures });
 
     this.updateTrails(drones);
@@ -688,11 +716,25 @@ export class TheatreMap implements OnDestroy {
       el.classList.toggle('selected', d.drone_id === selected);
       el.classList.toggle('landed', !d.is_armed);
       el.setAttribute('aria-label', `Drone ${d.drone_id}, trust ${Math.round(d.trust_score)}`);
+      let etaVal = d.eta_s;
+      if (etaVal == null && d.target_waypoints && d.target_waypoints.length > 0) {
+        let totalDist = 0;
+        let lastPt: [number, number] = [d.latitude, d.longitude];
+        for (const wp of d.target_waypoints) {
+          totalDist += distanceM(lastPt[0], lastPt[1], wp[0], wp[1]);
+          lastPt = wp;
+        }
+        const spd = d.ground_speed > 1 ? d.ground_speed : 12;
+        etaVal = Math.round(totalDist / spd);
+      }
+      const etaStr = (etaVal != null && etaVal > 0)
+        ? ` · ETA ${etaVal >= 60 ? `${Math.floor(etaVal / 60)}m ${etaVal % 60}s` : `${etaVal}s`}`
+        : '';
       const alt = this.view3d() && d.is_armed ? ` · ${Math.round(d.altitude)} m` : '';
       const said = this.store.radioBubbles()[d.drone_id];
       el.classList.toggle('talking', !!said);
       const bubble = said ? `<span class="bubble"><b>${escapeHtml(said.speaker)}</b>„${escapeHtml(said.text)}”</span>` : '';
-      el.innerHTML = `${bubble}<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}${alt}</span>`;
+      el.innerHTML = `${bubble}<span class="glyph" style="transform: rotate(${Math.round(d.heading)}deg)">▲</span><span class="tag">D${d.drone_id} · ${Math.round(d.trust_score)}${etaStr}${alt}</span>`;
       marker.setLngLat([d.longitude, d.latitude]);
     }
     for (const [id, m] of this.droneMarkers) {
@@ -735,7 +777,7 @@ export class TheatreMap implements OnDestroy {
       })),
     });
   }
-  protected toggleMapMode(mode: 'create_patrol' | 'create_threat' | 'create_corridor' | 'create_objective' | 'delete_zone' | 'pick_loiter'): void {
+  protected toggleMapMode(mode: MapMode): void {
     if (this.store.mapMode() === mode) {
       this.cancelMapMode();
     } else {
@@ -923,6 +965,7 @@ export class TheatreMap implements OnDestroy {
       this.map?.dragPan.enable();
     }
     this.drawCenter = null;
+    this.store.setMovingZoneId(null);
     this.corridorPoints.set([]);
     this.objectivePoints.set([]);
     this.threatPoints.set([]);
@@ -955,6 +998,18 @@ export class TheatreMap implements OnDestroy {
           features: [{
             type: 'Feature',
             properties: { radiusM, color, opacity },
+            geometry: { type: 'Polygon', coordinates: [ring] },
+          }],
+        });
+      } else if (mode === 'move_patrol' && this.movingZone()) {
+        const mz = this.movingZone()!;
+        const radiusM = mz.radius_m || 350;
+        const ring = circleRing(e.lngLat.lat, e.lngLat.lng, radiusM);
+        (map.getSource('preview-zone') as GeoJSONSource | undefined)?.setData({
+          type: 'FeatureCollection',
+          features: [{
+            type: 'Feature',
+            properties: { radiusM, color: '#00e5ff', opacity: 0.15 },
             geometry: { type: 'Polygon', coordinates: [ring] },
           }],
         });
@@ -1065,6 +1120,25 @@ export class TheatreMap implements OnDestroy {
           this.store.deleteZone(clickedObjective.id);
         }
         this.store.setMapMode('view');
+      } else if (mode === 'move_patrol') {
+        const clickedLat = e.lngLat.lat;
+        const clickedLon = e.lngLat.lng;
+        const activePatrols = this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL' && z.center && z.radius_m);
+        const clickedPz = activePatrols.find(pz => distanceM(clickedLat, clickedLon, pz.center![0], pz.center![1]) <= pz.radius_m!);
+        if (clickedPz && !this.store.movingZoneId()) {
+          this.store.setMovingZoneId(clickedPz.id);
+          this.store.pushToast('info', 'Patrol Zone Selected', `Selected "${clickedPz.name}". Now click anywhere on the map to set the new center.`);
+          return;
+        }
+
+        const targetZone = this.movingZone();
+        if (targetZone) {
+          void this.store.movePatrolZone(targetZone.id, [clickedLat, clickedLon]);
+          this.cancelMapMode();
+        } else {
+          this.store.pushToast('warn', 'No Patrol Zone', 'Please create or select an active patrol zone first.');
+          this.cancelMapMode();
+        }
       } else if (mode === 'pick_loiter') {
         this.store.setPickedLoiterPoint([e.lngLat.lat, e.lngLat.lng]);
         this.store.pushToast('ok', 'Loiter point selected', `Target coordinates: [${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)}]`);

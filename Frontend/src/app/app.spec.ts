@@ -95,6 +95,29 @@ describe('Authentication & Authorization Store', () => {
     expect(store.currentUser()).toBeNull();
     expect(sessionStorage.getItem('orion.user')).toBeNull();
   });
+
+  it('allows Operator to move a patrol zone and updates zone center', async () => {
+    await store.login('operator_demo', '123');
+    store.setMode('offline');
+    const pz = store.zones().find(z => z.zone_type === 'PATROL');
+    expect(pz).toBeTruthy();
+    const targetZoneId = pz!.id;
+    const newCenter: [number, number] = [44.345, 23.845];
+    await store.movePatrolZone(targetZoneId, newCenter);
+    const updated = store.zones().find(z => z.id === targetZoneId);
+    expect(updated?.center).toEqual(newCenter);
+  });
+
+  it('prevents Commander from moving a patrol zone', async () => {
+    await store.login('commander_demo', '123');
+    store.setMode('offline');
+    const pz = store.zones().find(z => z.zone_type === 'PATROL');
+    expect(pz).toBeTruthy();
+    const oldCenter = [...pz!.center!] as [number, number];
+    await store.movePatrolZone(pz!.id, [44.35, 23.85]);
+    const unchanged = store.zones().find(z => z.id === pz!.id);
+    expect(unchanged?.center).toEqual(oldCenter);
+  });
 });
 
 describe('hash chain', () => {

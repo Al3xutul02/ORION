@@ -308,17 +308,17 @@
     &.zone-WEATHER { color: var(--violet); }
 
     &.zone-PATROL {
-      display: inline-flex;
-      flex-direction: row;
-      align-items: center;
+      display: inline-flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
       gap: 6px;
       padding: 3px 10px;
       border-radius: 14px;
-      background: rgba(11, 18, 26, 0.96);
+      background: rgba(11, 18, 26, 0.96) !important;
       backdrop-filter: blur(8px);
-      border: 1px solid rgba(0, 229, 255, 0.8);
+      border: 1px solid rgba(0, 229, 255, 0.8) !important;
       box-shadow: 0 3px 12px rgba(0, 0, 0, 0.85);
-      color: #00e5ff;
+      color: #00e5ff !important;
       font-size: 10.5px;
       font-weight: 700;
       letter-spacing: 0.06em;
@@ -330,7 +330,11 @@
 
       .patrol-icon {
         font-size: 12px;
-        color: #00e5ff;
+        color: #00e5ff !important;
+      }
+
+      span {
+        color: #00e5ff !important;
       }
     }
 

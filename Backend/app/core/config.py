@@ -63,6 +63,7 @@ class Settings(BaseSettings):
 
     # MAVLink 2 Security & Signing
     MAVLINK_SIGNING_KEY: str = "craiova_hackathon_orion_secret_key_2026"
+    SECRET_KEY: str = "orion_jwt_secret_signing_key_craiova_2026"
     MAVLINK_SYSTEM_ID: int = 255
     MAVLINK_COMPONENT_ID: int = 1
 

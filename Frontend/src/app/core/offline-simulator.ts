@@ -253,6 +253,67 @@ export class OfflineSimulator {
     return zone;
   }
 
+  movePatrolZone(zoneId: number, newCenter: [number, number], operatorId = 'operator_demo', pathType: 'SAFE' | 'RISKY' = 'SAFE'): { ok: boolean; message: string } {
+    const pz = this.zones.find(z => z.id === zoneId && z.zone_type === 'PATROL' && z.is_active);
+    if (!pz || !pz.center) return { ok: false, message: 'Patrol zone not found or inactive.' };
+
+    const oldCenter = [...pz.center] as [number, number];
+    pz.center = [Number(newCenter[0].toFixed(6)), Number(newCenter[1].toFixed(6))];
+
+    const zoneDrones = this.drones.filter(d => (d.patrol_zone_id ?? 10) === zoneId || (zoneId === 10 && !d.patrol_zone_id) || (zoneId === 100 && (d.patrol_zone_id === 100 || d.patrol_zone_id === 10)));
+
+    if (pz.id === 10 || pz.id === 100) {
+      SECTORS.A.center = { lat: pz.center[0], lon: pz.center[1] };
+    }
+
+    for (const d of zoneDrones) {
+      d.patrol_zone_id = zoneId;
+      if (d.sector) {
+        d.sector.center = { lat: pz.center[0], lon: pz.center[1] };
+      }
+      d.jammedAt = null;
+      d.spoofedAt = null;
+      d.safeAirspaceTime = 10;
+      d.onOrbit = false;
+      d.repositioning = false;
+      d.holdPoint = undefined;
+      const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+      const curLat = d.lat + off.lat, curLon = d.lon + off.lon;
+      const route = planTargetRoute([curLat, curLon], [pz.center[0], pz.center[1]], this.zones, pathType);
+      d.route = 'ROUTE';
+      d.targetMode = 'PATROL';
+      d.targetPoint = [pz.center[0], pz.center[1]];
+      d.pathType = pathType;
+      if (route && route.waypoints.length > 1) {
+        d.egressPath = route.waypoints.map(([la, lo]) => [lo, la] as [number, number]);
+      } else {
+        d.egressPath = [[curLon, curLat], [pz.center[1], pz.center[0]]];
+      }
+      d.egressLeg = 0;
+      d.mode = 'EGRESS';
+    }
+
+    this.zones = [...this.zones];
+    this.log(
+      'PATROL_ZONE_MOVED',
+      null,
+      {
+        zone_id: zoneId,
+        name: pz.name,
+        old_center: oldCenter,
+        new_center: pz.center,
+        drones_count: zoneDrones.length,
+        drone_ids: zoneDrones.map(d => d.id),
+      },
+      operatorId,
+    );
+
+    return {
+      ok: true,
+      message: `Patrol zone "${pz.name}" moved to [${pz.center[0].toFixed(4)}, ${pz.center[1].toFixed(4)}]. ${zoneDrones.length} drone(s) repositioning to new location.`,
+    };
+  }
+
   addThreatZone(name: string, waypoints?: [number, number][], center?: [number, number], radiusM?: number, operatorId = "commander_demo"): Zone {
     const count = this.zones.filter(z => z.zone_type === 'THREAT' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
@@ -385,36 +446,7 @@ export class OfflineSimulator {
       zoneDrones = this.drones.filter(d => d.sector === SECTORS.A);
     }
 
-    if (tacticUpper === 'SECTOR_ORBIT_SHIFT') {
-      const jammer = this.zones.find(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
-      if (jammer && pz.center && pz.radius_m) {
-        const vLat = pz.center[0] - jammer.center![0];
-        const vLon = pz.center[1] - jammer.center![1];
-        const mag = Math.hypot(vLat, vLon) || 0.001;
-        const shiftM = 280;
-        const shiftLat = (shiftM / M_PER_DEG_LAT) * (vLat / mag);
-        const shiftLon = (shiftM / (M_PER_DEG_LAT * Math.cos((pz.center[0] * Math.PI) / 180))) * (vLon / mag);
-        pz.center = [pz.center[0] + shiftLat, pz.center[1] + shiftLon];
-      } else if (pz.center) {
-        pz.center = [pz.center[0] + 0.002, pz.center[1] + 0.002];
-      }
-      if (pz.center) {
-        SECTORS.A.center = { lat: pz.center[0], lon: pz.center[1] };
-        for (const d of zoneDrones) {
-          if (d.sector) d.sector.center = { lat: pz.center[0], lon: pz.center[1] };
-        }
-      }
-      for (const d of zoneDrones) {
-        d.jammedAt = null;
-        d.spoofedAt = null;
-        d.safeAirspaceTime = 10;
-        d.onOrbit = false;
-        if (d.mode === 'LOITER') d.mode = 'PATROL';
-      }
-      this.zones = [...this.zones];
-      this.log('PATROL_TACTIC_EXECUTED', null, { zone_id: zoneId, tactic: 'SECTOR_ORBIT_SHIFT', new_center: pz.center }, operatorId);
-      return { ok: true, message: 'Sector Orbit Shift executed. Swarm shifted to clear airspace.' };
-    } else if (tacticUpper === 'TIGHT_MESH') {
+    if (tacticUpper === 'TIGHT_MESH') {
       const baseR = (pz as any)['base_radius_m'] ?? pz.radius_m ?? 350;
       (pz as any)['base_radius_m'] = baseR;
       pz.radius_m = Math.round(Math.max(100, baseR * 0.6));
@@ -482,10 +514,10 @@ export class OfflineSimulator {
             trigger_event: 'PATROL_ZONE_JAMMED',
             blocked_action: 'NONE',
             blocked_reason: '',
-            recommended_action: 'SECTOR_ORBIT_SHIFT',
+            recommended_action: 'LOITER',
             status: 'PENDING' as const,
-            reason: 'Active EW Jamming overlaps ' + pz.name + '. Shift patrol orbit to clear airspace to preserve swarm communications and GPS navigation integrity.',
-            recommendation_details: '1. Displace patrol orbit center away from active EW jammer vector. 2. Maintain equidistant swarm spacing (360° / N) in safe airspace. 3. Preserve RF/mesh cross-ranging and communication line of sight.',
+            reason: 'Active EW Jamming overlaps ' + pz.name + '. Operator can move patrol zone to clear airspace or command LOITER to stabilize.',
+            recommendation_details: '1. Hold position (LOITER) to prevent entering jammer. 2. Move patrol zone to clear airspace. 3. Swarm automatically repositions to new location.',
             operator_id: null,
             approved_at: null,
             timestamp: new Date().toISOString(),
@@ -949,7 +981,6 @@ export class OfflineSimulator {
         d.mode = 'EGRESS';
         break;
       }
-      case 'SECTOR_ORBIT_SHIFT':
       case 'TIGHT_MESH':
       case 'WIDE_RECON':
       case 'RESYNC_EQUIDISTANT':
@@ -1489,6 +1520,35 @@ export class OfflineSimulator {
       const status: TrustStatus = score >= 75 ? 'GREEN' : score >= 40 ? 'YELLOW' : 'RED';
       const reason = reasons.length ? reasons.join('; ') : 'Sensors & consensus nominal';
 
+      let target_waypoints: [number, number][] | undefined = undefined;
+      let eta_s: number | undefined = undefined;
+
+      if (d.mode === 'EGRESS' && d.egressPath.length > 0) {
+        const remaining = d.egressPath.slice(d.egressLeg + 1);
+        target_waypoints = remaining.map(([lo, la]) => [la, lo]);
+        let totalDist = 0;
+        let prevLat = d.lat, prevLon = d.lon;
+        for (const [wLon, wLat] of remaining) {
+          totalDist += distanceM(prevLat, prevLon, wLat, wLon);
+          prevLat = wLat;
+          prevLon = wLon;
+        }
+        eta_s = Math.round(totalDist / EGRESS_SPEED_MS);
+      } else if (d.mode === 'PATROL' && !d.onOrbit) {
+        if (d.sector) {
+          const { center, orbit } = d.sector;
+          const targetLat = center.lat + orbit.lat * Math.sin(d.angle);
+          const targetLon = center.lon + orbit.lon * Math.cos(d.angle);
+          target_waypoints = [[targetLat, targetLon]];
+          const dist = distanceM(d.lat, d.lon, targetLat, targetLon);
+          eta_s = Math.round(dist / 12);
+        }
+      } else if (d.repositioning && d.targetPoint) {
+        target_waypoints = [d.targetPoint];
+        const dist = distanceM(d.lat, d.lon, d.targetPoint[0], d.targetPoint[1]);
+        eta_s = Math.round(dist / 12);
+      }
+
       const flightMode = d.mode === 'PATROL' ? 'GUIDED' : d.mode === 'EGRESS' ? d.route : d.mode;
       return {
         drone_id: d.id, latitude: lat, longitude: lon, altitude: d.mode === 'LANDED' ? 0 : d.altitude,
@@ -1498,6 +1558,8 @@ export class OfflineSimulator {
         battery_remaining: Math.round(Math.max(20, 100 - d.batteryUsed) * 10) / 10,
         drop_rate_comm: drop, rssi, flight_mode: flightMode, is_armed: d.mode !== 'LANDED',
         patrol_zone_id: d.patrol_zone_id ?? (d.sector === SECTORS.B ? 100 : 10),
+        target_waypoints,
+        eta_s,
         trust_score: score, trust_status: status, uncertainty_radius_m: unc, reason,
         scores: {
           drone_id: d.id, trust_score: score, trust_status: status, gps_score: gps, imu_score: imu,

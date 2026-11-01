@@ -8,6 +8,8 @@ from app.schemas.telemetry import TelemetryCreate, TelemetryResponse
 from app.services.trust_evaluator import trust_evaluator
 from app.services.simulator import simulator
 from app.models.drone import TelemetryLog
+from app.models.user import User
+from app.api.endpoints.auth import require_operator
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/drones", tags=["Drones & Fleet"])
@@ -61,6 +63,9 @@ def get_fleet_overview():
                 trust_status=score.trust_status,
                 uncertainty_radius_m=score.uncertainty_radius_m,
                 reason=score.reason,
+                patrol_zone_id=telem.get("patrol_zone_id"),
+                target_waypoints=telem.get("target_waypoints"),
+                eta_s=telem.get("eta_s"),
                 last_updated=datetime.now(timezone.utc)
             )
         )
@@ -139,8 +144,11 @@ class DeployDroneRequest(BaseModel):
 
 
 @router.post("/deploy")
-def deploy_drone(payload: Optional[DeployDroneRequest] = None, db: Session = Depends(get_db)):
-    """Deploys a new drone in the Base Forward zone."""
-    op_id = payload.operator_id if payload and payload.operator_id else "operator_demo"
-    res = simulator.deploy_drone(db=db, operator_id=op_id)
+def deploy_drone(
+    payload: Optional[DeployDroneRequest] = None,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
+    """Deploys a new drone in the Base Forward zone. Restricted to Operators."""
+    res = simulator.deploy_drone(db=db, operator_id=current_user.username)
     return res

@@ -3,7 +3,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.services.aar_service import aar_service
-from app.schemas.zone import CreatePatrolZoneRequest, CreateThreatZoneRequest, CreateSafeCorridorRequest, CreateObjectiveZoneRequest, ExecuteZoneTacticRequest
+from app.models.user import User
+from app.api.endpoints.auth import require_operator, require_commander, require_authenticated_user
+from app.schemas.zone import CreatePatrolZoneRequest, MovePatrolZoneRequest, CreateThreatZoneRequest, CreateSafeCorridorRequest, CreateObjectiveZoneRequest, ExecuteZoneTacticRequest
 from app.services.theatre_rules import theatre_rules
 from app.schemas.zone import TacticalZoneResponse
 
@@ -107,8 +109,12 @@ def get_zones_geojson():
 
 
 @router.post("/patrol")
-def create_patrol_zone(payload: CreatePatrolZoneRequest, db: Session = Depends(get_db)):
-    """Creates a new user-defined patrol zone on the map."""
+def create_patrol_zone(
+    payload: CreatePatrolZoneRequest,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
+    """Creates a new user-defined patrol zone on the map. Restricted to Operators."""
     zone = theatre_rules.add_patrol_zone(
         name=payload.name,
         center_lat=payload.center[0],
@@ -125,14 +131,39 @@ def create_patrol_zone(payload: CreatePatrolZoneRequest, db: Session = Depends(g
             "center": zone["center"],
             "radius_m": zone["radius_m"]
         },
-        operator_id=payload.operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return zone
 
 
+@router.post("/patrol/move")
+def move_patrol_zone(
+    payload: MovePatrolZoneRequest,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
+    """Moves an active patrol zone and repositions all drones inside it. Restricted to Operators."""
+    from app.services.simulator import simulator
+    res = simulator.move_patrol_zone(
+        zone_id=payload.zone_id,
+        new_lat=payload.center[0],
+        new_lon=payload.center[1],
+        db=db,
+        operator_id=current_user.username,
+        path_type=payload.path_type or "SAFE"
+    )
+    if res.get("status") == "ERROR":
+        raise HTTPException(status_code=404, detail=res.get("message"))
+    return res
+
+
 @router.delete("/{zone_id}")
-def delete_zone(zone_id: int, operator_id: str = "operator_demo", db: Session = Depends(get_db)):
-    """Deletes / clears a tactical zone by id (e.g. operator-deleted patrol zone)."""
+def delete_zone(
+    zone_id: int,
+    current_user: User = Depends(require_authenticated_user),
+    db: Session = Depends(get_db)
+):
+    """Deletes / clears a tactical zone by id. Accessible to authenticated users."""
     zone = theatre_rules.get_zone(zone_id)
     if not zone:
         # Fallback check if it's in zones list
@@ -153,14 +184,18 @@ def delete_zone(zone_id: int, operator_id: str = "operator_demo", db: Session = 
             "name": zone.get("name"),
             "zone_type": zone.get("zone_type")
         },
-        operator_id=operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return {"status": "DELETED", "id": zone_id}
 
 
 @router.post("/threat")
-def create_threat_zone(payload: CreateThreatZoneRequest, db: Session = Depends(get_db)):
-    """Creates a new operator-marked threat zone on the map (polygon or circle)."""
+def create_threat_zone(
+    payload: CreateThreatZoneRequest,
+    current_user: User = Depends(require_commander),
+    db: Session = Depends(get_db)
+):
+    """Creates a new threat zone on the map. Restricted strictly to Commanders."""
     zone = theatre_rules.add_threat_zone(
         name=payload.name,
         center_lat=payload.center[0] if payload.center else None,
@@ -179,14 +214,18 @@ def create_threat_zone(payload: CreateThreatZoneRequest, db: Session = Depends(g
             "center": zone.get("center"),
             "radius_m": zone.get("radius_m")
         },
-        operator_id=payload.operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return zone
 
 
 @router.post("/corridor")
-def create_safe_corridor(payload: CreateSafeCorridorRequest, db: Session = Depends(get_db)):
-    """Creates a new operator-defined safe corridor on the map."""
+def create_safe_corridor(
+    payload: CreateSafeCorridorRequest,
+    current_user: User = Depends(require_commander),
+    db: Session = Depends(get_db)
+):
+    """Creates a new safe corridor on the map. Restricted strictly to Commanders."""
     zone = theatre_rules.add_safe_corridor(
         name=payload.name,
         waypoints=payload.waypoints
@@ -200,14 +239,18 @@ def create_safe_corridor(payload: CreateSafeCorridorRequest, db: Session = Depen
             "name": zone["name"],
             "waypoints": zone["waypoints"]
         },
-        operator_id=payload.operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return zone
 
 
 @router.post("/objective")
-def create_objective_zone(payload: CreateObjectiveZoneRequest, db: Session = Depends(get_db)):
-    """Creates a new operator-defined polygonal objective zone on the map."""
+def create_objective_zone(
+    payload: CreateObjectiveZoneRequest,
+    current_user: User = Depends(require_commander),
+    db: Session = Depends(get_db)
+):
+    """Creates a new polygonal objective zone on the map. Restricted strictly to Commanders."""
     zone = theatre_rules.add_objective_zone(
         name=payload.name,
         waypoints=payload.waypoints
@@ -221,16 +264,20 @@ def create_objective_zone(payload: CreateObjectiveZoneRequest, db: Session = Dep
             "name": zone["name"],
             "waypoints": zone["waypoints"]
         },
-        operator_id=payload.operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return zone
 
 
 @router.post("/tactic")
-def execute_zone_tactic(payload: ExecuteZoneTacticRequest, db: Session = Depends(get_db)):
-    """Executes a swarm tactical maneuver for an active patrol zone."""
+def execute_zone_tactic(
+    payload: ExecuteZoneTacticRequest,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
+    """Executes a swarm tactical maneuver for an active patrol zone. Restricted to Operators."""
     from app.services.simulator import simulator
-    res = simulator.apply_zone_tactic(db, payload.zone_id, payload.tactic, operator_id=payload.operator_id or "operator_demo")
+    res = simulator.apply_zone_tactic(db, payload.zone_id, payload.tactic, operator_id=current_user.username)
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=404, detail=res.get("message"))
     aar_service.log_event(
@@ -242,6 +289,6 @@ def execute_zone_tactic(payload: ExecuteZoneTacticRequest, db: Session = Depends
             "tactic": payload.tactic,
             "result": res
         },
-        operator_id=payload.operator_id or "operator_demo"
+        operator_id=current_user.username
     )
     return res

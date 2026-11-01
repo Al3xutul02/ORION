@@ -5,8 +5,12 @@ from app.services.theatre_rules import theatre_rules
 from app.services.simulator import simulator
 from app.core.database import SessionLocal
 from app.models.audit import AuditLog
+from app.core.security import create_access_token
+
+cmd_headers = {'Authorization': f'Bearer {create_access_token("commander_demo", "COMMANDER")}'}
 
 client = TestClient(app)
+client.headers["Authorization"] = f"Bearer {create_access_token("operator_demo", "OPERATOR")}"
 
 
 def test_initial_patrol_zone_exists():
@@ -42,7 +46,7 @@ def test_create_and_delete_patrol_zone_api():
 
 def test_create_and_delete_objective_zone_api():
     """Operator can create, render as GeoJSON polygon, and delete an objective zone."""
-    res = client.post("/api/v1/zones/objective", json={
+    res = client.post("/api/v1/zones/objective", headers=cmd_headers, json={
         "name": "Objective Sector Alpha",
         "waypoints": [[44.3300, 23.8200], [44.3400, 23.8300], [44.3350, 23.8400]]
     })
@@ -74,7 +78,7 @@ def test_create_and_delete_objective_zone_api():
 
 def test_create_linear_objective_zone_api():
     """Operator can create a 2-point linear objective zone rendered as GeoJSON LineString."""
-    res = client.post("/api/v1/zones/objective", json={
+    res = client.post("/api/v1/zones/objective", headers=cmd_headers, json={
         "name": "Objective Line Recon",
         "waypoints": [[44.3300, 23.8200], [44.3400, 23.8300]]
     })
@@ -140,3 +144,61 @@ def test_command_drone_join_patrol_and_loiter():
     assert simulator.drones[3]["target_mode"] == "LOITER"
     assert simulator.drones[3]["target_point"] == [44.3280, 23.8150]
     assert simulator.drones[3]["path_type"] == "RISKY"
+
+
+def test_move_patrol_zone():
+    """Operator can move a patrol zone to a new location, repositioning the drones."""
+    # Create a patrol zone
+    c_res = client.post("/api/v1/zones/patrol", json={
+        "name": "Moveable Zone",
+        "center": [44.3310, 23.8210],
+        "radius_m": 300.0,
+        "operator_id": "operator_demo"
+    })
+    assert c_res.status_code == 200
+    zone_id = c_res.json()["id"]
+
+    try:
+        # Move the patrol zone
+        new_coords = [44.3410, 23.8350]
+        m_res = client.post("/api/v1/zones/patrol/move", json={
+            "zone_id": zone_id,
+            "center": new_coords,
+            "operator_id": "operator_demo"
+        })
+        assert m_res.status_code == 200
+        data = m_res.json()
+        assert data["status"] == "MOVED"
+        assert data["zone"]["center"] == new_coords
+        assert theatre_rules.get_zone(zone_id)["center"] == new_coords
+    finally:
+        client.delete(f"/api/v1/zones/{zone_id}")
+
+
+def test_move_patrol_zone_with_profile_and_eta():
+    """Moving a patrol zone with A* profile (SAFE / RISKY) guides drones via A* route with target waypoints and ETA."""
+    from app.services.simulator import simulator
+    # Move patrol zone Alpha (id 100) with RISKY profile
+    new_coords = [44.3480, 23.8320]
+    res = client.post("/api/v1/zones/patrol/move", json={
+        "zone_id": 100,
+        "center": new_coords,
+        "operator_id": "operator_demo",
+        "path_type": "RISKY"
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "MOVED"
+    assert data["zone"]["center"] == new_coords
+
+    # Verify drones are routed with RISKY path_type
+    drone = simulator.drones[1]
+    assert drone["mode"] == "ROUTE"
+    assert drone["target_mode"] == "PATROL"
+    assert drone["path_type"] == "RISKY"
+
+    # Verify telemetry exposes target_waypoints and positive eta_s
+    telem = simulator.get_telemetry(1)
+    assert len(telem["target_waypoints"]) > 0
+    assert telem["eta_s"] is not None
+    assert telem["eta_s"] > 0

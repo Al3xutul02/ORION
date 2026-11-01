@@ -115,9 +115,9 @@ export class OrionStore implements OnDestroy {
       }
       if (!user) {
         if (username === 'operator_demo' && password === '123') {
-          user = { username: 'operator_demo', role: 'OPERATOR', displayName: 'Operator Demo' };
+          user = { username: 'operator_demo', role: 'OPERATOR', displayName: 'Operator Demo', token: 'offline-token-operator_demo' };
         } else if (username === 'commander_demo' && password === '123') {
-          user = { username: 'commander_demo', role: 'COMMANDER', displayName: 'Commander Demo' };
+          user = { username: 'commander_demo', role: 'COMMANDER', displayName: 'Commander Demo', token: 'offline-token-commander_demo' };
         } else {
           return { ok: false, message: 'Invalid username or password' };
         }
@@ -170,6 +170,8 @@ export class OrionStore implements OnDestroy {
   readonly highlightedEvents = signal<number[]>([]);
   readonly mapMode = signal<MapMode>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+  readonly movingZoneId = signal<number | null>(null);
+  readonly pathType = signal<'SAFE' | 'RISKY'>('SAFE');
   readonly training = signal<TrainingSession | null>(null);
   /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
   readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
@@ -190,6 +192,14 @@ export class OrionStore implements OnDestroy {
 
   setPickedLoiterPoint(point: [number, number] | null): void {
     this.pickedLoiterPoint.set(point);
+  }
+
+  setMovingZoneId(id: number | null): void {
+    this.movingZoneId.set(id);
+  }
+
+  setPathType(type: 'SAFE' | 'RISKY'): void {
+    this.pathType.set(type);
   }
 
   readonly selectedDrone = computed(() => this.drones().find(d => d.drone_id === this.selectedDroneId()) ?? null);
@@ -696,6 +706,29 @@ export class OrionStore implements OnDestroy {
     const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Patrol zone created', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
+    }
+    this.pollLive();
+  }
+
+  async movePatrolZone(zoneId: number, center: [number, number], pathType?: 'SAFE' | 'RISKY'): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can move patrol zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
+    const profile = pathType ?? this.pathType();
+    if (this.offline) {
+      const res = this.offline.movePatrolZone(zoneId, center, username, profile);
+      if (res.ok) {
+        this.pushToast('ok', 'Patrol zone moved', res.message);
+      } else {
+        this.pushToast('warn', 'Failed to move zone', res.message);
+      }
+      return;
+    }
+    const res = await this.call(() => this.api.movePatrolZone({ zone_id: zoneId, center, operator_id: username, path_type: profile }));
+    if (res) {
+      this.pushToast('ok', 'Patrol zone moved', res.message || `Patrol zone #${zoneId} moved to new coordinates.`);
     }
     this.pollLive();
   }

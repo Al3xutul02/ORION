@@ -448,6 +448,20 @@ class TheatreRulesEngine:
         self.zones.append(zone)
         return zone
 
+    def move_patrol_zone(self, zone_id: int, center_lat: float, center_lon: float) -> Optional[Dict[str, Any]]:
+        """Moves an existing PATROL zone to a new center [center_lat, center_lon]."""
+        pz = self.get_zone(zone_id)
+        if not pz or pz.get("zone_type") != "PATROL":
+            for z in self.zones:
+                if z.get("id") == zone_id and z.get("zone_type") == "PATROL":
+                    pz = z
+                    break
+        if not pz:
+            return None
+        pz["center"] = [round(center_lat, 5), round(center_lon, 5)]
+        pz["shifted"] = True
+        return pz
+
     def clear_weather_zone(self) -> Optional[Dict[str, Any]]:
         zones = self.active_weather_zones()
         if not zones:
@@ -694,7 +708,6 @@ class TheatreRulesEngine:
     def apply_patrol_tactic(self, zone_id: int, tactic: str) -> Dict[str, Any]:
         """
         Applies a tactical swarm maneuver to a patrol zone:
-        - SECTOR_ORBIT_SHIFT: Displaces orbit away from active EW jammer boundary to clear airspace.
         - TIGHT_MESH: Contracts orbit radius by 40% for anti-spoofing P2P cross-ranging.
         - WIDE_RECON: Expands orbit radius by 40% for maximum perimeter surveillance sweep.
         - RESYNC_EQUIDISTANT: Rebalances drone phases symmetrically.
@@ -705,56 +718,7 @@ class TheatreRulesEngine:
             return {"status": "ERROR", "message": "Patrol zone not found"}
 
         tactic_upper = tactic.upper()
-        if tactic_upper == "SECTOR_ORBIT_SHIFT":
-            jammers = [
-                z for z in self.active_danger_zones()
-                if z.get("zone_type") == "INTERFERENCE" and z.get("geometry_type") == "CIRCLE"
-            ]
-            overlapping = []
-            for j in jammers:
-                d_m = haversine_distance_m(pz["center"][0], pz["center"][1], j["center"][0], j["center"][1])
-                if d_m < (pz["radius_m"] + j["radius_m"]):
-                    overlapping.append((d_m, j))
-
-            if overlapping:
-                overlapping.sort(key=lambda x: x[0])
-                d_m, j = overlapping[0]
-                v_lat = pz["center"][0] - j["center"][0]
-                v_lon = pz["center"][1] - j["center"][1]
-                mag = math.hypot(v_lat, v_lon)
-                if mag < 1e-6:
-                    v_lat, v_lon, mag = 0.002, 0.002, math.hypot(0.002, 0.002)
-                needed_shift_m = (pz["radius_m"] + j["radius_m"]) - d_m + 70.0
-                needed_shift_m = min(400.0, max(140.0, needed_shift_m))
-                shift_lat = (needed_shift_m / 111139.0) * (v_lat / mag)
-                shift_lon = (needed_shift_m / (111139.0 * math.cos(math.radians(pz["center"][0])))) * (v_lon / mag)
-                new_lat = max(44.3120, min(44.3480, pz["center"][0] + shift_lat))
-                new_lon = max(23.7940, min(23.8520, pz["center"][1] + shift_lon))
-                pz["center"] = [round(new_lat, 5), round(new_lon, 5)]
-                pz["shifted"] = True
-                pz["tactic"] = "SECTOR_ORBIT_SHIFT"
-                return {
-                    "status": "APPLIED",
-                    "tactic": "SECTOR_ORBIT_SHIFT",
-                    "zone_id": zone_id,
-                    "zone_name": pz["name"],
-                    "new_center": pz["center"],
-                    "message": f"Orbit shifted to ({new_lat:.4f}, {new_lon:.4f}) outside EW jammer boundary."
-                }
-            else:
-                pz["center"] = [round(pz["center"][0] + 0.0015, 5), round(pz["center"][1] + 0.0015, 5)]
-                pz["shifted"] = True
-                pz["tactic"] = "SECTOR_ORBIT_SHIFT"
-                return {
-                    "status": "APPLIED",
-                    "tactic": "SECTOR_ORBIT_SHIFT",
-                    "zone_id": zone_id,
-                    "zone_name": pz["name"],
-                    "new_center": pz["center"],
-                    "message": "Defensive sector orbit offset applied."
-                }
-
-        elif tactic_upper == "TIGHT_MESH":
+        if tactic_upper == "TIGHT_MESH":
             base_r = pz.get("base_radius_m", pz["radius_m"])
             pz["base_radius_m"] = base_r
             pz["radius_m"] = round(max(100.0, base_r * 0.6), 1)

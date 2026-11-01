@@ -1,7 +1,7 @@
 <div
   class="map"
   #map
-  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'create_objective' || store.mapMode() === 'pick_loiter'"
+  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'move_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'create_objective' || store.mapMode() === 'pick_loiter'"
   [class.mode-delete]="store.mapMode() === 'delete_zone'"
 ></div>
 
@@ -49,6 +49,15 @@
     } @else if (store.mapMode() === 'delete_zone') {
       <span class="mode-icon">&#10005;</span>
       <span class="mode-text">Click on any tactical zone (patrol, threat, corridor, objective) to delete it</span>
+    } @else if (store.mapMode() === 'move_patrol') {
+      <span class="mode-icon">&#8644;</span>
+      <span class="mode-text">
+        @if (movingZone(); as z) {
+          Click on map to place <strong>{{ z.name }}</strong> at new coordinates ({{ store.pathType() }} Profile)
+        } @else {
+          Click on a patrol zone, then click new coordinates on the map
+        }
+      </span>
     } @else if (store.mapMode() === 'pick_loiter') {
       <span class="mode-icon">&#9678;</span>
       <span class="mode-text">Click on map to select loiter destination</span>
@@ -92,6 +101,15 @@
         title="Create new patrol zone by dragging on map"
       >
         + Patrol Zone
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn"
+        [class.active]="store.mapMode() === 'move_patrol'"
+        (click)="toggleMapMode('move_patrol')"
+        title="Move patrol zone: click to select, then click new map location"
+      >
+        &#8644; Move Patrol Zone
       </button>
     }
     @if (store.isCommander()) {

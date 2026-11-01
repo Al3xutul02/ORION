@@ -92,6 +92,10 @@ export class OrionApi {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/patrol`, body));
   }
 
+  movePatrolZone(body: { zone_id: number; center: [number, number]; operator_id?: string; path_type?: string }) {
+    return firstValueFrom(this.http.post<{ status: string; zone: Zone; drones_count: number; message: string }>(`${this.base}/zones/patrol/move`, body));
+  }
+
   createThreatZone(body: { name?: string; waypoints?: [number, number][]; center?: [number, number]; radius_m?: number; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/threat`, body));
   }

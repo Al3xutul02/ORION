@@ -168,6 +168,29 @@ class OrionFleetSimulator:
         else:
             battery_remaining = max(20.0, round(100.0 - battery_val, 1))
 
+        target_waypoints = []
+        eta_s = None
+        if mode in ("CORRIDOR", "RTL", "ROUTE") and d_data.get("egress_waypoints"):
+            target_waypoints = [list(wp) for wp in d_data["egress_waypoints"]]
+            total_dist_m = 0.0
+            cur_p = (d_data["lat"], d_data["lon"])
+            for wp in target_waypoints:
+                total_dist_m += math.hypot((wp[0] - cur_p[0]) * 111139.0, (wp[1] - cur_p[1]) * 111139.0 * math.cos(math.radians(cur_p[0])))
+                cur_p = (wp[0], wp[1])
+            curr_speed = max(speed, 1.0)
+            eta_s = int(round(total_dist_m / curr_speed))
+        elif mode == "PATROL" and not d_data.get("on_orbit", True):
+            pz = theatre_rules.get_zone(d_data.get("patrol_zone_id", 100))
+            if pz and pz.get("center"):
+                target_waypoints = [list(pz["center"])]
+                dist_m = math.hypot((pz["center"][0] - d_data["lat"]) * 111139.0, (pz["center"][1] - d_data["lon"]) * 111139.0 * math.cos(math.radians(d_data["lat"])))
+                eta_s = int(round(dist_m / max(speed, 1.0)))
+        elif mode == "LOITER" and d_data.get("repositioning") and d_data.get("target_point"):
+            target_waypoints = [list(d_data["target_point"])]
+            tp = d_data["target_point"]
+            dist_m = math.hypot((tp[0] - d_data["lat"]) * 111139.0, (tp[1] - d_data["lon"]) * 111139.0 * math.cos(math.radians(d_data["lat"])))
+            eta_s = int(round(dist_m / max(speed, 1.0)))
+
         return {
             "drone_id": drone_id,
             "latitude": rep_lat,
@@ -184,7 +207,9 @@ class OrionFleetSimulator:
             "noise": 15.0,
             "flight_mode": flight_mode,
             "patrol_zone_id": d_data.get("patrol_zone_id", 100),
-            "is_armed": mode != "LANDED"
+            "is_armed": mode != "LANDED",
+            "target_waypoints": target_waypoints,
+            "eta_s": eta_s,
         }
 
     def subscribe(self, callback: Callable[[Dict[str, Any]], Any]):
@@ -306,7 +331,81 @@ class OrionFleetSimulator:
             reason=rec.get("reason")
         )
 
-    def apply_zone_tactic(self, db, zone_id: int, tactic: str, operator_id: str = "OPERATOR_1") -> Dict[str, Any]:
+    def move_patrol_zone(
+        self,
+        zone_id: int,
+        new_lat: float,
+        new_lon: float,
+        db: Optional[Any] = None,
+        operator_id: str = "operator_demo",
+        path_type: str = "SAFE"
+    ) -> Dict[str, Any]:
+        """Moves an active PATROL zone to [new_lat, new_lon] and repositions all drones inside it."""
+        old_zone = theatre_rules.get_zone(zone_id)
+        if not old_zone or old_zone.get("zone_type") != "PATROL":
+            for z in theatre_rules.zones:
+                if z.get("id") == zone_id and z.get("zone_type") == "PATROL":
+                    old_zone = z
+                    break
+        if not old_zone:
+            return {"status": "ERROR", "message": f"Patrol zone {zone_id} not found"}
+
+        old_center = list(old_zone.get("center", [0.0, 0.0]))
+        updated_zone = theatre_rules.move_patrol_zone(zone_id, new_lat, new_lon)
+        if not updated_zone:
+            return {"status": "ERROR", "message": "Failed to update patrol zone center"}
+
+        if zone_id == 100 or len(theatre_rules.active_patrol_zones()) == 1:
+            self.sector_center = {"lat": updated_zone["center"][0], "lon": updated_zone["center"][1], "alt": 120.0}
+
+        zone_drones = [d for d in self.drones.values() if d.get("patrol_zone_id") == zone_id]
+        if not zone_drones and zone_id == 100:
+            zone_drones = list(self.drones.values())
+
+        for d in zone_drones:
+            d["patrol_zone_id"] = zone_id
+            d["on_orbit"] = False
+            d["jammed"] = False
+            d["spoofed"] = False
+            d["safe_airspace_time"] = 10.0
+            if "hold_point" in d:
+                del d["hold_point"]
+            rep_lat, rep_lon = self._reported_position(d)
+            route = theatre_rules.plan_target_route((rep_lat, rep_lon), (new_lat, new_lon), path_type=path_type)
+            d["mode"] = "ROUTE"
+            d["target_mode"] = "PATROL"
+            d["target_zone_id"] = zone_id
+            d["route_dest"] = [new_lat, new_lon]
+            d["path_type"] = path_type
+            if route and len(route.get("waypoints", [])) > 1:
+                d["egress_waypoints"] = [list(p) for p in route["waypoints"][1:]]
+            else:
+                d["egress_waypoints"] = [[new_lat, new_lon]]
+
+        if db:
+            from app.services.aar_service import aar_service
+            aar_service.log_event(
+                db=db,
+                event_type="PATROL_ZONE_MOVED",
+                drone_id=None,
+                details={
+                    "zone_id": zone_id,
+                    "name": updated_zone["name"],
+                    "old_center": old_center,
+                    "new_center": updated_zone["center"],
+                    "drones_count": len(zone_drones),
+                },
+                operator_id=operator_id
+            )
+
+        return {
+            "status": "MOVED",
+            "zone": updated_zone,
+            "drones_count": len(zone_drones),
+            "message": f"Patrol Zone '{updated_zone['name']}' moved to ({new_lat:.4f}, {new_lon:.4f}). {len(zone_drones)} drone(s) repositioning to new location."
+        }
+
+    def apply_zone_tactic(self, db, zone_id: int, tactic: str, operator_id: str = "operator_demo") -> Dict[str, Any]:
         res = theatre_rules.apply_patrol_tactic(zone_id, tactic)
         if res.get("status") == "ERROR":
             return res
@@ -316,14 +415,7 @@ class OrionFleetSimulator:
         if not zone_drones and zone_id == 100:
             zone_drones = list(self.drones.values())
 
-        if tactic_upper == "SECTOR_ORBIT_SHIFT":
-            for d in zone_drones:
-                d["jammed"] = False
-                d["spoofed"] = False
-                d["on_orbit"] = False
-                if d.get("mode") in ("LOITER", "GUIDED"):
-                    d["mode"] = "PATROL"
-        elif tactic_upper in ("TIGHT_MESH", "WIDE_RECON"):
+        if tactic_upper in ("TIGHT_MESH", "WIDE_RECON"):
             for d in zone_drones:
                 d["on_orbit"] = False
                 if d.get("mode") in ("LOITER", "GUIDED"):
@@ -424,7 +516,7 @@ class OrionFleetSimulator:
             else:
                 d["egress_waypoints"] = [[float(t_pt[0]), float(t_pt[1])]]
 
-        elif action in ("SECTOR_ORBIT_SHIFT", "TIGHT_MESH", "WIDE_RECON", "RESYNC_EQUIDISTANT", "EGRESS_CORRIDOR"):
+        elif action in ("TIGHT_MESH", "WIDE_RECON", "RESYNC_EQUIDISTANT", "EGRESS_CORRIDOR"):
             zid = target_zone_id or d.get("patrol_zone_id", 100)
             self.apply_zone_tactic(db, zid, action, operator_id=operator_id)
         elif action == "CONTINUE_PATROL":
@@ -759,15 +851,15 @@ class OrionFleetSimulator:
                                 trigger_event="PATROL_ZONE_JAMMED",
                                 blocked_action="NOMINAL_PATROL_ORBIT",
                                 blocked_reason=f"Nominal orbit crosses {j['name']}",
-                                recommended_action="SECTOR_ORBIT_SHIFT",
+                                recommended_action="LOITER",
                                 reason=(
                                     f"EW Jamming Zone ({j['name']}) intersects {pz['name']}. "
-                                    "Action needed: Shift patrol orbit away from jammer boundary to clear airspace and preserve navigation link while maintaining continuous perimeter surveillance."
+                                    "Action needed: Hold position or move patrol zone away from jammer boundary to clear airspace and maintain swarm communications."
                                 ),
                                 recommendation_details=(
-                                    "1. Shift swarm orbit center away from EW jammer vector. "
-                                    "2. Recalibrate onboard sensors in safe airspace. "
-                                    "3. Resume equispaced perimeter sweep."
+                                    "1. Hold position (LOITER) to prevent flying into jammer. "
+                                    "2. Operator moves patrol zone to clear airspace. "
+                                    "3. Swarm automatically repositioning to new orbit."
                                 ),
                                 status="PENDING"
                             )

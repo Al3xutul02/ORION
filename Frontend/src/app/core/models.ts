@@ -6,8 +6,8 @@ export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'W
 export type WeatherKind = 'STORM' | 'RAIN' | 'WIND';
 export type DataMode = 'live' | 'offline';
 export type LinkState = 'connecting' | 'online' | 'offline';
-export type ZoneTactic = 'SECTOR_ORBIT_SHIFT' | 'TIGHT_MESH' | 'WIDE_RECON' | 'EGRESS_CORRIDOR' | 'RESYNC_EQUIDISTANT';
-export type MapMode = 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'create_objective' | 'delete_zone' | 'pick_loiter';
+export type ZoneTactic = 'TIGHT_MESH' | 'WIDE_RECON' | 'EGRESS_CORRIDOR' | 'RESYNC_EQUIDISTANT';
+export type MapMode = 'view' | 'create_patrol' | 'move_patrol' | 'create_threat' | 'create_corridor' | 'create_objective' | 'delete_zone' | 'pick_loiter';
 
 export interface ScoreBreakdown {
   drone_id: number;
@@ -43,6 +43,8 @@ export interface DroneState {
   reason: string;
   scores?: ScoreBreakdown;
   patrol_zone_id?: number;
+  target_waypoints?: [number, number][];
+  eta_s?: number;
   /** Drone-to-drone mesh view (Backend/app/services/mesh.py, core/mesh.ts). */
   mesh?: MeshView | null;
   /** SIM = ORION's simulator; MAVLINK = an external vehicle (SITL, real drone) heard over UDP. */

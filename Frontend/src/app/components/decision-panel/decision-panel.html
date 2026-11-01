@@ -267,37 +267,52 @@
                   } @else {
                     <span class="chip green"><span class="dot"></span>Airspace Nominal</span>
                   }
+                  <button
+                    type="button"
+                    class="btn sm primary move-zone-btn"
+                    (click)="startMoveZone(pz.id)"
+                    title="Move this patrol zone to a new location on the map"
+                  >
+                    ⇄ Move Patrol Zone
+                  </button>
                 </div>
               </div>
               @if (isZoneJammed(pz.id)) {
                 <p class="hazard-desc">
-                  ⚠️ Active electronic warfare jamming enters this patrol sector. Sector Orbit Shift fallback recommended to maintain swarm communications.
+                  ⚠️ Active electronic warfare jamming enters this patrol sector. Use "Move Patrol Zone" to reposition the swarm to clear airspace.
                 </p>
               }
             </div>
 
+            <!-- Flight Path Risk Profile Selector for Patrol Zone Swarm -->
+            <div class="path-risk-box">
+              <div class="risk-head">
+                <span class="label">A* Path Profile:</span>
+              </div>
+              <div class="risk-options" role="radiogroup" aria-label="Route risk profile">
+                <button
+                  type="button"
+                  class="risk-btn safe"
+                  [class.on]="pathType() === 'SAFE'"
+                  (click)="setPathType('SAFE')"
+                  title="Zero hazards: strictly bypasses interference, threat, and severe weather"
+                >
+                  <span class="symbol">&#128737;</span> Safe (0 hazards)
+                </button>
+                <button
+                  type="button"
+                  class="risk-btn risky"
+                  [class.on]="pathType() === 'RISKY'"
+                  (click)="setPathType('RISKY')"
+                  title="Traverses hazard zones (interference/weather); strictly avoids threat zones"
+                >
+                  <span class="symbol">&#9889;</span> Risky (threats avoided)
+                </button>
+              </div>
+            </div>
+
             <h4 class="matrix-heading">Swarm Tactical Directives</h4>
             <ul class="matrix tactics-matrix">
-              <!-- 1. Sector Orbit Shift -->
-              <li [class.recommended]="isZoneJammed(pz.id)">
-                <span class="icon" aria-hidden="true">&#9889;</span>
-                <div class="what">
-                  <strong>Sector Orbit Shift (Jammer Fallback)</strong>
-                  <span>Displaces swarm orbit away from active EW jammer boundary to clear airspace while maintaining perimeter coverage.</span>
-                  @if (isZoneJammed(pz.id)) {
-                    <span class="chip accent">Recommended Fallback</span>
-                  }
-                </div>
-                <div class="do">
-                  @if (executingTactic() === 'SECTOR_ORBIT_SHIFT') {
-                    <button class="btn sm approve" type="button" (click)="executeTactic(pz.id, 'SECTOR_ORBIT_SHIFT')">Confirm</button>
-                    <button class="btn sm ghost" type="button" (click)="executingTactic.set(null)">Cancel</button>
-                  } @else {
-                    <button class="btn sm" type="button" [disabled]="!canCommand()" (click)="executingTactic.set('SECTOR_ORBIT_SHIFT')">Execute</button>
-                  }
-                </div>
-              </li>
-
               <!-- 2. Tight Mesh Formation -->
               <li>
                 <span class="icon" aria-hidden="true">&#128279;</span>

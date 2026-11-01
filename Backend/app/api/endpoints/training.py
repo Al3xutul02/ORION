@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.models.user import User
+from app.api.endpoints.auth import require_operator
 from pydantic import BaseModel, Field
 
 from app.services.copilot_service import CopilotUnavailable
@@ -46,7 +48,7 @@ class DebriefOut(BaseModel):
 
 
 @router.post("/adversary-move", response_model=MoveOut)
-def adversary_move(state: ExerciseState):
+def adversary_move(state: ExerciseState, current_user: User = Depends(require_operator)):
     """Gemini, as the simulated opposing force, picks the next training event. 503 = play the local adversary."""
     try:
         return training_service.next_move(state.model_dump())
@@ -55,7 +57,7 @@ def adversary_move(state: ExerciseState):
 
 
 @router.post("/debrief", response_model=DebriefOut)
-def debrief(results: SessionResults):
+def debrief(results: SessionResults, current_user: User = Depends(require_operator)):
     """Instructor feedback written from the session's measured results. 503 = use the local debrief."""
     try:
         return training_service.debrief(results.model_dump())

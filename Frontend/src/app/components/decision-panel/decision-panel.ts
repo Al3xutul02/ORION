@@ -31,7 +31,7 @@ export class DecisionPanel {
 
   protected history = computed(() => this.store.recommendations().filter(r => r.status !== 'PENDING'));
 
-  protected pathType = signal<'SAFE' | 'RISKY'>('SAFE');
+  protected pathType = this.store.pathType;
   protected patrolZones = computed(() => this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL'));
   protected selectedPatrolZoneId = signal<number | null>(null);
   protected pickedLoiterPoint = computed(() => this.store.pickedLoiterPoint());
@@ -57,6 +57,13 @@ export class DecisionPanel {
     this.executingTactic.set(null);
   }
 
+  protected startMoveZone(zoneId: number): void {
+    this.store.setMovingZoneId(zoneId);
+    this.store.setMapMode('move_patrol');
+    const pz = this.store.zones().find(z => z.id === zoneId);
+    this.store.pushToast('info', 'Move Patrol Zone', `Click anywhere on the map to set the new center for ${pz?.name ?? 'the patrol zone'}.`);
+  }
+
   protected zoneDrones(zoneId: number): DroneState[] {
     return this.store.drones().filter(d => (d.patrol_zone_id ?? 10) === zoneId || (zoneId === 100 && (d.patrol_zone_id === 100 || d.patrol_zone_id === 10)));
   }
@@ -79,7 +86,7 @@ export class DecisionPanel {
   }
 
   protected setPathType(type: 'SAFE' | 'RISKY'): void {
-    this.pathType.set(type);
+    this.store.setPathType(type);
   }
 
   protected setPatrolZone(id: number): void {
@@ -175,8 +182,8 @@ export class DecisionPanel {
 
   protected recReason(rec: Recommendation): string {
     if (rec.reason) return rec.reason;
-    if (rec.trigger_event === 'PATROL_ZONE_JAMMED' || rec.recommended_action === 'SECTOR_ORBIT_SHIFT') {
-      return 'Active electronic warfare jamming intersects the patrol zone, compromising drone GPS and C2 navigation. Action needed: Shift swarm orbit to unjammed sector to restore clean communications while maintaining continuous surveillance.';
+    if (rec.trigger_event === 'PATROL_ZONE_JAMMED') {
+      return 'Active electronic warfare jamming intersects the patrol zone. Action needed: Move patrol zone or command LOITER to reposition swarm outside jammer range.';
     }
     if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE' || rec.recommended_action === 'CONTINUE_PATROL') {
       return 'Sensor recalibration complete and verified in clean airspace. Action needed: Drone is holding idle in loiter; operator command is required to resume regular sector patrol.';
