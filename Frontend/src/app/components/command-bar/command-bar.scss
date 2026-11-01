@@ -209,9 +209,9 @@
 
 .track {
   position: relative;
-  flex: 1;
+  flex: 1 1 100%;
   height: 4px;
-  margin: 8px 0 18px;
+  margin: 8px 12px 30px;
   border-radius: 2px;
   background: var(--line);
 }
@@ -255,6 +255,10 @@
     .lbl {
       color: var(--text-dim);
     }
+  }
+
+  &:nth-of-type(even) .lbl {
+    margin-top: 16px;
   }
 
   &:first-child .lbl {
