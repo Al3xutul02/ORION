@@ -9,31 +9,32 @@ describe('OfflineSimulator (extended exercise)', () => {
     return sim.ledger.events.map(e => ({ type: e.event_type, drone: e.drone_id, ...JSON.parse(e.details) }));
   }
 
-  it('plays every beat of the timeline in order, deterministically', async () => {
+  it('stages nothing on its own: attacks come from the adversary or the buttons', async () => {
     const events = await runExercise(180);
-    const at = (type: string) => events.find(e => e.type === type)?.mission_time_s as number | undefined;
+    const attacks = ['SPOOFING_ATTACK_INITIATED', 'COMMAND_REPLAY_REJECTED', 'EW_EMITTER_ACTIVE', 'COMMAND_LINK_LOST'];
+    expect(events.some(e => attacks.includes(e.type))).toBeFalse();
+  });
 
-    expect(at('SPOOFING_ATTACK_INITIATED')).toBe(30);
-    expect(at('RECOMMENDATION_ISSUED')).toBe(60);
-    expect(at('COMMAND_REPLAY_REJECTED')).toBe(100);
-    expect(at('EW_EMITTER_ACTIVE')).toBe(112);
-    // Consensus should first see a single-drone fault, then mark the zone around the 2:10 beat.
-    expect(at('GPS_DEGRADED_SINGLE')!).toBeLessThan(at('ZONE_INTERFERENCE_MARKED')!);
-    expect(at('ZONE_INTERFERENCE_MARKED')!).toBeGreaterThanOrEqual(120);
-    expect(at('ZONE_INTERFERENCE_MARKED')!).toBeLessThanOrEqual(140);
-    expect(at('COMMAND_LINK_LOST')).toBe(145);
-    const failsafe = events.find(e => e.type === 'FAILSAFE_APPLIED')!;
-    expect(failsafe.mission_time_s).toBe(150);
-    expect(failsafe['applied']).toBe('LOITER'); // RTL from Sector 7 would cross Threat Zone Bravo
-    expect(at('COMMAND_LINK_RESTORED')).toBe(160);
-    expect(at('MISSION_REPORT_READY')).toBe(160);
-
-    const again = await runExercise(180);
-    expect(again.map(e => e.type)).toEqual(events.map(e => e.type));
+  it('plays a jammer and a link loss through to consensus and the failsafe', async () => {
+    const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
+    const at = () => sim.ledger.events.map(e => ({ type: e.event_type, ...JSON.parse(e.details) }));
+    expect(sim.applyAdversaryMove('JAMMER', null)).toBeTrue();
+    for (let t = 0; t < 40; t += 0.5) sim.advance(0.5);
+    expect(sim.applyAdversaryMove('LINK_LOSS', 5)).toBeTrue();
+    for (let t = 0; t < 20; t += 0.5) sim.advance(0.5);
+    await sim.ledger.append('TEST_FLUSH', null, {});
+    const events = at();
+    const first = (type: string) => events.find(e => e.type === type)?.mission_time_s as number | undefined;
+    // Consensus first sees a single-drone fault, then marks the zone.
+    expect(first('GPS_DEGRADED_SINGLE')!).toBeLessThan(first('ZONE_INTERFERENCE_MARKED')!);
+    expect(first('FAILSAFE_APPLIED')).toBe(45); // 5 s after the link was lost at T+40
+    expect(first('COMMAND_LINK_RESTORED')).toBe(55);
   });
 
   it('keeps the hash chain intact across the whole exercise', async () => {
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
+    sim.applyAdversaryMove('SPOOF', 2);
+    sim.applyAdversaryMove('JAMMER', null);
     for (let t = 0; t < 180; t += 0.5) sim.advance(0.5);
     await sim.ledger.append('TEST_FLUSH', null, {});
     expect((await verifyChain(sim.ledger.events)).is_valid).toBeTrue();
@@ -41,7 +42,7 @@ describe('OfflineSimulator (extended exercise)', () => {
 
   it('refuses commands to a drone whose link is down', () => {
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
-    sim.triggerLinkLoss();
+    sim.applyAdversaryMove('LINK_LOSS', 5);
     expect(sim.command(5, 'LOITER', 'OPERATOR_1').ok).toBeFalse();
     expect(sim.command(6, 'LOITER', 'OPERATOR_1').ok).toBeTrue();
   });

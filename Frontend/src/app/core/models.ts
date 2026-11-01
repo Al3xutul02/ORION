@@ -185,29 +185,3 @@ export interface CopilotMessage {
   meta?: string;
 }
 
-export interface ScenarioStep {
-  at: number; // seconds
-  label: string;
-  detail: string;
-}
-
-// Spec "Scenariu demo de 3 minute", as the backend simulator runs it.
-export const SCENARIO: ScenarioStep[] = [
-  { at: 0, label: 'Context', detail: 'Four drones patrol the sector, everything nominal' },
-  { at: 30, label: 'GPS spoofing on Drone 2', detail: 'Position jumps, trust drops, consensus isolates it' },
-  { at: 60, label: 'What is safe now', detail: 'RTL blocked by interference zone, loiter + corridor recommended' },
-  { at: 100, label: 'Replayed command', detail: 'An old signed command is retransmitted and rejected' },
-  { at: 130, label: 'Zone interference', detail: 'Two drones lose GPS, sector marked, patrol reallocated' },
-  { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
-];
-
-// Extended conflict exercise run by the offline simulator (same beats, plus mobile EW and link loss).
-export const SCENARIO_EXTENDED: ScenarioStep[] = [
-  { at: 0, label: 'Context', detail: 'Six drones patrol two sectors over the Craiova exercise area' },
-  { at: 30, label: 'GPS spoofing on D2', detail: 'Position jumps, trust drops, consensus isolates it' },
-  { at: 60, label: 'What is safe now', detail: 'RTL blocked by interference zone, loiter + corridor recommended' },
-  { at: 100, label: 'Replay', detail: 'An old signed command is retransmitted and rejected' },
-  { at: 112, label: 'Mobile jammer', detail: 'Hostile emitter moves in; one drone hit = local fault, several = zone mapped and tracked' },
-  { at: 145, label: 'Link lost on D5', detail: 'After 5 s ORION applies the failsafe, filtered by zone rules' },
-  { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
-];

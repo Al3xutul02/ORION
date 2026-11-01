@@ -78,17 +78,8 @@ describe('local adversary', () => {
 describe('Demo simulator in training mode', () => {
   let recs: Recommendation[] = [];
   const make = () => {
-    const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: r => (recs = r) });
-    sim.scripted = false;
-    return sim;
+    return new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: r => (recs = r) });
   };
-
-  it('drops the fixed script', async () => {
-    const sim = make();
-    for (let i = 0; i < 80; i++) sim.advance(0.5); // 40 s: the script would have spoofed D2 at 30 s
-    await sim.ledger.append('TEST_FLUSH', null, {});
-    expect(sim.ledger.events.some(e => e.event_type === 'SPOOFING_ATTACK_INITIATED')).toBeFalse();
-  });
 
   it('stages a targeted spoof and puts a decision to the operator once detected', async () => {
     const sim = make();
@@ -124,7 +115,6 @@ describe('Demo simulator in training mode', () => {
 describe('training pressure cap', () => {
   it('never lets more than two drones be spoofed at once', () => {
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
-    sim.scripted = false;
     expect(sim.applyAdversaryMove('SPOOF', 1)).toBeTrue();
     expect(sim.applyAdversaryMove('SPOOF', 2)).toBeTrue();
     expect(sim.adversaryOptions().eligible.SPOOF).toEqual([]);

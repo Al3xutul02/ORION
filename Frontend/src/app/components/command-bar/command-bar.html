@@ -19,7 +19,7 @@
     <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Demo</button>
   </div>
 
-  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'Deterministic 3-minute demo scenario'">
+  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'AI training, in the browser'">
     <span class="dot"></span>
     @switch (store.mode() === 'offline' ? 'local' : store.link()) {
       @case ('online') { Backend online }
@@ -33,14 +33,14 @@
 
   <div class="clock mono" aria-label="Mission time">
     <span class="t">T+{{ clock() }}</span>
-    <span class="step">{{ store.mode() === 'offline' ? (store.training() ? 'AI training' : currentStep().label) : 'Dynamic battlefield' }}</span>
+    <span class="step">{{ store.mode() === 'offline' ? (store.training() ? 'AI training' : 'Ready: press Start') : 'Dynamic battlefield' }}</span>
   </div>
 
   <div class="controls no-print">
     @if (store.running()) {
       <button class="btn" type="button" (click)="store.pause()" [disabled]="store.busy()">Pause</button>
     } @else {
-      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">Start</button>
+      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">{{ store.mode() === 'offline' && store.training()?.phase !== 'running' ? 'Start AI training' : 'Start' }}</button>
     }
     <button class="btn" type="button" (click)="store.reset()" [disabled]="store.busy()">Reset</button>
     @if (store.mode() === 'offline') {
@@ -97,23 +97,34 @@
         <button class="btn sm" type="button" (click)="store.finishTraining()">End &amp; debrief</button>
       }
     </div>
-  } @else if (store.mode() === 'offline') {
+    <!-- The session so far: each attack the adversary staged, where it happened. -->
     <div class="track">
       <div class="fill" [style.width.%]="progress()"></div>
-      @for (s of scenario(); track s.at) {
-        <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
-          <span class="pin"></span>
-          <span class="lbl">{{ s.label }}</span>
-        </span>
+      @for (m of t.moves; track $index) {
+        @if (m.move !== 'WAIT') {
+          <span class="mark done" [style.left.%]="movePos(m.at_s ?? 0)" [title]="m.reason">
+            <span class="pin"></span>
+            <span class="lbl">{{ moveLabels[m.move] }}{{ m.target_drone ? ' D' + m.target_drone : '' }}</span>
+          </span>
+        }
       }
     </div>
+  } @else if (store.mode() === 'offline') {
+    <div class="live-banner training">
+      <span class="pulse-dot"></span>
+      <span class="live-title">AI training</span>
+      <span class="live-sub">Press <b>Start AI training</b>: for 3 minutes an adversary attacks, mostly GPS spoofing and jamming. You decide; at the end you get a score and a debrief.</span>
+    </div>
+  }
+  <!-- Manual attacks work before and during a session, on top of what the adversary does. -->
+  @if (store.mode() === 'offline') {
     <div class="inject">
-      <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary attacks for 3 minutes (mostly GPS spoofing and jamming); you get a scored debrief">&#127919; AI training</button>
-      <div class="adv" role="group" aria-label="Training adversary">
-        <button type="button" [class.on]="store.adversaryChoice() === 'RL'" (click)="store.setAdversaryChoice('RL')" title="Q-learning policy trained on thousands of simulated sessions; works offline">RL</button>
-        <button type="button" [class.on]="store.adversaryChoice() === 'GEMINI'" (click)="store.setAdversaryChoice('GEMINI')" title="Gemini picks each attack (needs the backend and internet)">Gemini</button>
+      <span class="hint">Adversary:</span>
+      <div class="adv" role="group" aria-label="Training adversary" [title]="store.training()?.phase === 'running' ? 'Applies to the next session' : ''">
+        <button type="button" [class.on]="store.adversaryChoice() === 'RL'" [disabled]="store.training()?.phase === 'running'" (click)="store.setAdversaryChoice('RL')" title="Q-learning policy trained on thousands of simulated sessions; works offline">RL</button>
+        <button type="button" [class.on]="store.adversaryChoice() === 'GEMINI'" [disabled]="store.training()?.phase === 'running'" (click)="store.setAdversaryChoice('GEMINI')" title="Gemini picks each attack (needs the backend and internet)">Gemini</button>
       </div>
-      <span class="hint">Demo toys:</span>
+      <span class="hint">Manual attacks:</span>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Mobile jammer</button>

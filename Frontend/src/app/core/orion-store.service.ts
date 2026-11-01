@@ -16,7 +16,7 @@ import policyJson from './adversary-policy.json';
 const RL_POLICY = policyJson as RlPolicy;
 export type AdversaryChoice = 'RL' | 'GEMINI';
 import {
-  AdversaryMove, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
+  AdversaryMove, AdversaryMoveKind, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
   scoreSession, seededRandom,
 } from './training';
 
@@ -88,7 +88,7 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
 
 /**
  * Single source of truth for the dashboard. In "live" mode it listens to the backend
- * WebSocket and polls REST; in "offline" (Demo) mode it drives the deterministic 3-minute demo simulator.
+ * WebSocket and polls REST; in "offline" (Demo) mode it runs AI-training sessions on the in-browser simulator.
  */
 @Injectable({ providedIn: 'root' })
 export class OrionStore implements OnDestroy {
@@ -345,7 +345,6 @@ export class OrionStore implements OnDestroy {
     if (this.mode() !== 'offline') this.setMode('offline');
     await this.reset();
     if (!this.offline) return;
-    this.offline.scripted = false;
     this.training.set({
       phase: 'running', startedAt: this.elapsed(), lengthS: SESSION_LENGTH_S, nextMoveAt: this.elapsed() + FIRST_MOVE_AT_S,
       requesting: false, adversary: this.adversaryChoice() === 'RL' ? 'RL' : 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
@@ -386,7 +385,7 @@ export class OrionStore implements OnDestroy {
     this.training.set({ ...now, phase: 'done', debrief: { score, grade, lines, decisions, ...text, source, model } });
   }
 
-  /** Closes the debrief and goes back to the regular scripted Demo. */
+  /** Closes the debrief; the next Start begins a new session. */
   async closeTraining(): Promise<void> {
     await this.reset();
   }
@@ -492,6 +491,8 @@ export class OrionStore implements OnDestroy {
 
   async start(): Promise<void> {
     if (this.offline) {
+      // Demo is AI training: Start begins a session, or resumes the one that is paused.
+      if (this.training()?.phase !== 'running') return this.startTraining();
       this.offline.start();
       this.running.set(true);
     } else {
@@ -519,7 +520,6 @@ export class OrionStore implements OnDestroy {
     this.training.set(null);
     this.radioBubbles.set({});
     if (this.offline) {
-      this.offline.scripted = true;
       this.offline.reset();
       this.running.set(false);
     } else {
@@ -530,10 +530,14 @@ export class OrionStore implements OnDestroy {
 
   async trigger(kind: Trigger): Promise<void> {
     if (this.offline) {
-      if (kind === 'spoofing') this.offline.triggerSpoofing();
-      if (kind === 'replay') this.offline.triggerReplay();
-      if (kind === 'interference') this.offline.triggerInterference();
-      if (kind === 'linkloss') this.offline.triggerLinkLoss();
+      // Manual injections go through the same path as the adversary, so ORION answers them too.
+      const manual: Partial<Record<Trigger, [AdversaryMoveKind, number | null]>> = {
+        spoofing: ['SPOOF', 2], replay: ['REPLAY', null], interference: ['JAMMER', null], linkloss: ['LINK_LOSS', 5],
+      };
+      const m = manual[kind];
+      if (m && !this.offline.applyAdversaryMove(m[0], m[1], 'SIMULATOR')) {
+        this.pushToast('info', 'Not possible right now', 'That attack is already under way or the drone is unavailable.');
+      }
       if (kind === 'weather-storm') this.offline.triggerWeather('STORM');
       if (kind === 'weather-rain') this.offline.triggerWeather('RAIN');
       if (kind === 'weather-wind') this.offline.triggerWeather('WIND');

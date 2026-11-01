@@ -53,7 +53,6 @@ function observe(t: number, last: AdversaryMoveKind | null): RlObservation {
 function episode(choose: Chooser, seed: number, learn?: (s: number, a: number, r: number, s2: number, valid2: number[] | null) => void): EpisodeResult {
   const rnd = seededRandom(seed);
   sim.reset();
-  sim.scripted = false;
   recs = [];
   const operator = new VirtualOperator(rnd);
   const issuedAt = new Map<number, number>();

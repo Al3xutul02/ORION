@@ -8,10 +8,10 @@ import { AdversaryMoveKind, AdversaryOptions } from './training';
 import { RadioKind, dronesIn } from './radio';
 
 /**
- * Plan B from the spec, extended into a fuller (simulated, defensive) conflict exercise over
- * the Craiova area: the backend's fixed 3-minute timeline, plus a mobile hostile jammer that
- * ORION tracks by peer consensus and a command-link loss handled by the zone-aware failsafe.
- * Runs entirely in the browser so the demo works when the backend or MySQL is down.
+ * The Demo theatre over the Craiova area (simulated, defensive), run entirely in the browser so
+ * it works when the backend or MySQL is down. Nothing happens on its own: attacks are staged by
+ * the AI-training adversary or the manual buttons through applyAdversaryMove(), and ORION raises
+ * a decision for each one (core/training.ts).
  */
 
 interface Sector {
@@ -37,8 +37,6 @@ const JAMMER = {
 };
 
 const LINK_LOSS = { droneId: 5, durationS: 15, failsafeAfterS: 5 };
-
-const SCRIPT = { spoof: 30, recommend: 60, replay: 100, jammer: 112, linkLoss: 145, report: 160 };
 
 const DYNAMIC_ZONE_ID = 100;
 
@@ -125,11 +123,6 @@ export class OfflineSimulator {
   elapsed = 0;
   running = false;
   speed = 1;
-  /**
-   * The fixed 3-minute script. Off during AI training (core/training.ts): the adversary then
-   * stages the attacks through applyAdversaryMove() and ORION raises a decision for each one.
-   */
-  scripted = true;
 
   private drones: SimDrone[] = [];
   private zones: Zone[] = [];
@@ -205,14 +198,6 @@ export class OfflineSimulator {
   advance(dt: number): void {
     this.elapsed = Math.round((this.elapsed + dt) * 10) / 10;
 
-    if (this.scripted) {
-      if (this.elapsed >= SCRIPT.spoof) this.triggerSpoofing();
-      if (this.elapsed >= SCRIPT.recommend) this.issueRecommendation();
-      if (this.elapsed >= SCRIPT.replay) this.triggerReplay();
-      if (this.elapsed >= SCRIPT.jammer) this.triggerInterference();
-      if (this.elapsed >= SCRIPT.linkLoss) this.triggerLinkLoss();
-      if (this.elapsed >= SCRIPT.report) this.markReportReady();
-    }
     this.raiseDetections();
     this.playRadio();
 
@@ -234,7 +219,7 @@ export class OfflineSimulator {
 
   private nextWeatherId = 200;
 
-  /** Brings a weather cell into the theatre (only from the buttons; the scripted timeline has none). */
+  /** Brings a weather cell into the theatre (adversary or the weather buttons). */
   addPatrolZone(name: string, center: [number, number], radiusM: number): Zone {
     const zone: Zone = {
       id: 200 + this.zones.length,
@@ -497,7 +482,7 @@ export class OfflineSimulator {
     this.recommendFor(d.id, 'WEATHER_LIMIT_EXCEEDED');
   }
 
-  /** A recommendation built from the current action matrix (used for weather; the scripted D2 one stays as is). */
+  /** A recommendation built from the current action matrix. */
   private recommendFor(droneId: number, trigger: string): void {
     if (this.recs.some(r => r.drone_id === droneId && r.status === 'PENDING')) return;
     const state = this.states().find(s => s.drone_id === droneId)!;
@@ -525,89 +510,7 @@ export class OfflineSimulator {
     this.cb.onRecommendations(this.recs);
   }
 
-  // ---- scenario triggers (also used by the manual buttons) -------------------------------
-
-  triggerSpoofing(): void {
-    if (this.milestones.has('spoof')) return;
-    this.milestones.add('spoof');
-    this.drone(2).spoofedAt = this.elapsed;
-    this.saySpoofed(2);
-    this.log('SPOOFING_ATTACK_INITIATED', 2, {
-      attack_vector: 'GPS_SPOOFING_INJECTION', target: 'Drone 2',
-      description: 'False ephemeris and sudden position jump injected',
-    }, 'SIMULATOR');
-  }
-
-  issueRecommendation(): void {
-    if (this.milestones.has('rec')) return;
-    this.milestones.add('rec');
-    const state = this.states().find(d => d.drone_id === 2)!;
-    const actions = evaluateActions(state, this.zones);
-    const rtl = actions.find(a => a.id === 'RETURN_TO_HOME')!;
-    const rec: Recommendation = {
-      id: this.recs.length + 1,
-      drone_id: 2,
-      timestamp: new Date().toISOString(),
-      trigger_event: rtl.allowed ? 'SPOOFING_ATTACK_DETECTED' : 'TRUST_DEGRADED_EW_HAZARD',
-      blocked_action: rtl.allowed ? 'CONTINUE_PATROL' : 'RETURN_TO_HOME',
-      blocked_reason: rtl.allowed ? 'GPS ephemeris corrupted by spoofing attack; patrol trajectory compromised' : `Direct Return-to-Home route blocked: ${rtl.reason}`,
-      recommended_action: rtl.allowed ? 'LOITER' : 'LOITER_THEN_SAFE_CORRIDOR_RETREAT',
-      reason: rtl.allowed
-        ? 'Adversary GPS spoofing detected (sudden ephemeris jump). Action needed: Continuing patrol with corrupted GPS coordinates will drive the drone off course into danger; immediate LOITER is required to hold position and stabilize onboard EKF/IMU.'
-        : 'Hostile electronic warfare hazard active: Direct path to Base is compromised by EW jamming. Action needed: Direct RTL will cause complete C2 link loss; drone must immediately loiter and divert through Safe Corridor Alpha.',
-      recommendation_details: rtl.allowed
-        ? '1. Command immediate LOITER to hold position and stabilize flight. 2. Allow onboard EKF/IMU filters to stabilize. 3. Await sensor recalibration before continuing patrol.'
-        : '1. Command immediate LOITER to stabilize. 2. Steer egress via Safe Corridor Alpha (avoiding EW Jamming Zone Sector 4) to Base.',
-      status: 'PENDING',
-      operator_id: null,
-      approved_at: null,
-    };
-    this.recs = [rec, ...this.recs];
-    this.sayLater(3, 'TOC', 'Am văzut recomandarea ORION pentru D2. Decizia e la operator, nu întârziați.', 'ORDER');
-    this.log('RECOMMENDATION_ISSUED', 2, {
-      recommendation_id: rec.id, blocked_action: rec.blocked_action,
-      blocked_reason: rec.blocked_reason, recommended_action: rec.recommended_action,
-    }, 'ORION_THEATRE_RULES');
-    this.cb.onRecommendations(this.recs);
-  }
-
-  triggerReplay(): void {
-    if (this.milestones.has('replay')) return;
-    this.milestones.add('replay');
-    this.sayLater(2, 'OPERATOR_2', 'Comandă de întoarcere respinsă pentru D2, secvență veche. Cineva reia comenzi pe canal.');
-    this.log('COMMAND_REPLAY_REJECTED', 2, {
-      command: 'RETURN_TO_HOME', sequence: 5, age_s: 30,
-      reason: 'Replay detected: sequence already consumed and timestamp expired',
-      signature: 'fabricated_or_replayed_signature_deadbeef1234',
-    }, 'SIMULATED_ADVERSARY');
-  }
-
-  /** A hostile mobile jammer enters the theatre; ORION only sees its effect on the drones. */
-  triggerInterference(): void {
-    if (this.milestones.has('jammer')) return;
-    this.milestones.add('jammer');
-    const [lat, lon] = JAMMER.path[0];
-    this.jammer = { lat, lon, leg: 0 };
-    this.log('EW_EMITTER_ACTIVE', null, {
-      description: 'Simulated hostile mobile jammer starts transmitting south-east of Sector 4',
-    }, 'SIMULATOR');
-  }
-
-  triggerLinkLoss(): void {
-    if (this.milestones.has('linkloss')) return;
-    const d = this.drone(LINK_LOSS.droneId);
-    if (d.mode === 'LANDED') return;
-    this.milestones.add('linkloss');
-    d.linkLostAt = this.elapsed;
-    d.failsafeDone = false;
-    this.sayLinkLost(d.id);
-    this.log('COMMAND_LINK_LOST', d.id, {
-      description: 'Command link jammed: no telemetry acknowledgements',
-      failsafe_in_s: LINK_LOSS.failsafeAfterS,
-    }, 'SIMULATOR');
-  }
-
-  // ---- AI training: what the adversary may do now, and doing it ---------------------------
+  // ---- attacks: what the adversary (or the manual buttons) may do now, and doing it ---------
 
   /** The adversary's menu right now: only events this simulation can stage (core/training.ts). */
   adversaryOptions(): AdversaryOptions {
@@ -663,6 +566,7 @@ export class OfflineSimulator {
     } else if (move === 'REPLAY') {
       const victims = this.drones.filter(d => d.mode !== 'LANDED');
       const victim = victims[Math.floor(this.elapsed) % victims.length] ?? this.drones[0];
+      this.sayLater(2, 'OPERATOR_2', `Comandă de întoarcere respinsă pentru D${victim.id}, secvență veche. Cineva reia comenzi pe canal.`);
       this.log('COMMAND_REPLAY_REJECTED', victim.id, {
         command: 'RETURN_TO_HOME', sequence: Math.max(1, this.commandSeq - 3), age_s: 30,
         reason: 'Replay detected: sequence already consumed and timestamp expired',
@@ -722,12 +626,6 @@ export class OfflineSimulator {
 
   private sayLinkLost(droneId: number): void {
     this.sayLater(2, 'TOC', `D${droneId} nu mai răspunde la comenzi. Lăsăm failsafe-ul să lucreze, nu forțăm.`, 'ORDER');
-  }
-
-  markReportReady(): void {
-    if (this.milestones.has('report')) return;
-    this.milestones.add('report');
-    this.log('MISSION_REPORT_READY', null, { summary: 'Exercise completed. Hash chain intact. Ready for export.' });
   }
 
   decide(recId: number, decision: 'APPROVE' | 'REJECT', operatorId: string): { ok: boolean; message: string } {
@@ -954,7 +852,7 @@ export class OfflineSimulator {
       const inRange = !!j && d.mode !== 'LANDED' && distanceM(d.lat, d.lon, j.lat, j.lon) <= JAMMER.radiusM;
       if (inRange && d.jammedAt === null) {
         d.jammedAt = this.elapsed;
-        if (!this.scripted) this.detections.push({ droneId: d.id, at: this.elapsed + DETECTION_DELAY_S, trigger: 'GPS_JAMMED' });
+        this.detections.push({ droneId: d.id, at: this.elapsed + DETECTION_DELAY_S, trigger: 'GPS_JAMMED' });
       }
       if (!inRange && d.jammedAt !== null) {
         d.jammedAt = null;
@@ -1028,7 +926,7 @@ export class OfflineSimulator {
           description: 'Link back. Drone keeps its failsafe action until the operator decides',
         });
         this.sayLater(1, 'OPERATOR_2', `D${d.id} e din nou pe legătură. Păstrează acțiunea de failsafe până decidem.`);
-        if (!this.scripted && d.mode === 'LOITER') this.recommendFor(d.id, 'COMMAND_LINK_RESTORED');
+        if (d.mode === 'LOITER') this.recommendFor(d.id, 'COMMAND_LINK_RESTORED');
       }
     }
   }

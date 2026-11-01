@@ -74,7 +74,6 @@ describe('patrol-zone recommendation', () => {
   it('approving it shifts the orbit instead of commanding a drone that does not exist', () => {
     let recs: Recommendation[] = [];
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: r => (recs = r) });
-    sim.scripted = false;
     sim.applyAdversaryMove('JAMMER', null);
     for (let i = 0; i < 80 && !recs.some(r => r.trigger_event === 'PATROL_ZONE_JAMMED'); i++) sim.advance(0.5);
     const zoneRec = recs.find(r => r.trigger_event === 'PATROL_ZONE_JAMMED');

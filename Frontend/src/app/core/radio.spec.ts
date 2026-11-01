@@ -8,19 +8,21 @@ describe('radio log (Demo)', () => {
   const make = () => new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
   const flush = (sim: OfflineSimulator) => sim.ledger.append('TEST_FLUSH', null, {});
 
-  it('adds simulated radio chatter shortly after the scripted beats', async () => {
+  it('adds simulated radio chatter shortly after an attack', async () => {
     const sim = make();
-    for (let i = 0; i < 2 * 70; i++) sim.advance(0.5); // spoof at 30 s, recommendation at 60 s
+    for (let i = 0; i < 20; i++) sim.advance(0.5); // T+10
+    sim.applyAdversaryMove('SPOOF', 2);
+    sim.applyAdversaryMove('REPLAY', null);
+    for (let i = 0; i < 12; i++) sim.advance(0.5);
     await flush(sim);
     const radio = sim.ledger.events.filter(e => e.event_type === 'RADIO_TRANSMISSION');
     expect(radio.length).toBe(2);
-    const [spoof, rec] = radio.map(details);
+    const [replay, spoof] = radio.map(details);
+    expect(replay['transcript']).toContain('secvență veche');
     expect(spoof['transcript']).toContain('D2 a sărit pe hartă');
     expect(spoof['simulated']).toBeTrue();
-    expect(spoof['mission_time_s'] as number).toBeGreaterThanOrEqual(34);
-    expect(radio[0].operator_id).toBe('OPERATOR_2');
-    expect(rec['transcript']).toContain('recomandarea ORION pentru D2');
-    expect(radio[1].operator_id).toBe('TOC');
+    expect(spoof['mission_time_s'] as number).toBeGreaterThanOrEqual(14);
+    expect(radio[1].operator_id).toBe('OPERATOR_2');
   });
 
   it('logs a real transmission at the time the mic was keyed, in the hash chain', async () => {
@@ -43,7 +45,8 @@ describe('radio log (Demo)', () => {
 
   it('forgets pending chatter on reset', async () => {
     const sim = make();
-    for (let i = 0; i < 61; i++) sim.advance(0.5); // spoofed at 30 s, its line is due at 34 s
+    sim.applyAdversaryMove('SPOOF', 2); // its radio line is due 4 s later
+    sim.advance(1);
     sim.reset();
     for (let i = 0; i < 20; i++) sim.advance(0.5);
     await flush(sim);
@@ -81,8 +84,8 @@ describe('radio entries', () => {
 
   it('tags the simulated chatter too', async () => {
     const sim = new OfflineSimulator({ onFleet: () => {}, onLedger: () => {}, onRecommendations: () => {} });
-    sim.triggerSpoofing();
-    sim.triggerLinkLoss();
+    sim.applyAdversaryMove('SPOOF', 2);
+    sim.applyAdversaryMove('LINK_LOSS', 5);
     for (let i = 0; i < 12; i++) sim.advance(0.5);
     await sim.ledger.append('TEST_FLUSH', null, {});
     const said = sim.ledger.events.map(radioEntry).filter(x => x !== null);
