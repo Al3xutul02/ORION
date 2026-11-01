@@ -323,6 +323,12 @@ export class OrionStore implements OnDestroy {
       for (const d of u.drones) next[d.drone_id] = [...(h[d.drone_id] ?? []), d.trust_score].slice(-HISTORY_LEN);
       return next;
     });
+    if (this.selectedDroneId() !== null && !u.drones.some(d => d.drone_id === this.selectedDroneId())) {
+      this.selectedDroneId.set(null);
+    }
+    if (this.detailsDroneId() !== null && !u.drones.some(d => d.drone_id === this.detailsDroneId())) {
+      this.detailsDroneId.set(null);
+    }
     if (this.selectedDroneId() === null) {
       const worst = [...u.drones].sort((a, b) => a.trust_score - b.trust_score)[0];
       if (worst && worst.trust_status !== 'GREEN') this.selectedDroneId.set(worst.drone_id);
@@ -550,6 +556,19 @@ export class OrionStore implements OnDestroy {
   setSpeed(speed: number): void {
     this.speed.set(speed);
     if (this.offline) this.offline.speed = speed;
+  }
+
+  async deployDrone(): Promise<void> {
+    if (this.offline) {
+      const drone = this.offline.deployDrone();
+      this.pushToast('ok', 'Drone deployed', `Drone ${drone.id} launched at Base Forward Alpha.`);
+    } else {
+      const res = await this.call(() => this.api.deployDrone());
+      if (res) {
+        this.pushToast('ok', 'Drone deployed', `Drone ${res.drone_id} launched at Base Forward Alpha.`);
+      }
+    }
+    this.pollLive();
   }
 
   /** Operator picks an action for a drone directly, instead of approving an ORION recommendation. */
@@ -892,7 +911,7 @@ export class OrionStore implements OnDestroy {
       this.detailsDroneId.set(null);
       return;
     }
-    this.selectedDroneId.set(id);
+    this.selectDrone(id);
     this.detailsDroneId.set(id);
   }
 

@@ -1,6 +1,13 @@
 <section class="panel">
   <header class="panel-head">
     <h2>Fleet trust</h2>
+    <button
+      type="button"
+      class="btn sm primary deploy-btn"
+      (click)="deployDrone()"
+      [disabled]="store.busy()"
+      title="Deploy a new drone in Base Forward zone"
+    >Deploy Drone</button>
     <span class="spacer"></span>
     @let c = store.fleetCounts();
     <span class="chip green" title="Trusted">{{ c.green }}</span>
@@ -14,7 +21,7 @@
         type="button"
         class="card status-{{ d.trust_status }}"
         [class.selected]="store.selectedDroneId() === d.drone_id"
-        (click)="store.selectDrone(d.drone_id)"
+        (click)="store.openDetails(d.drone_id)"
       >
         <div class="top">
           <div class="score mono" [attr.aria-label]="'Trust score ' + (d.trust_score | number: '1.0-0')">

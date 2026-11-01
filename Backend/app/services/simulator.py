@@ -56,9 +56,11 @@ class OrionFleetSimulator:
         self.next_random_event_at: float = 12.0
         self.random_events_enabled: bool = True
         self._last_event_kind: Optional[str] = None
+        self._next_drone_id: int = 5
         self._init_drones()
 
     def _init_drones(self):
+        self._next_drone_id = 5
         self.drones = {
             1: {
                 "lat": 44.3350, "lon": 23.8260, "alt": 120.0, "heading": 0.0, "speed": 12.0,
@@ -120,11 +122,13 @@ class OrionFleetSimulator:
             return d["lat"] + off_lat, d["lon"] + off_lon
         return d["lat"], d["lon"]
 
-    def get_telemetry(self, drone_id: int) -> Dict[str, Any]:
+    def get_telemetry(self, drone_id: int) -> Optional[Dict[str, Any]]:
         """
         Generates the MAVLink 2 perceived telemetry for a drone.
         Always reports the perceived GPS fix (_reported_position), never secret ground-truth.
         """
+        if drone_id not in self.drones:
+            return None
         d_data = self.drones[drone_id]
         mode = d_data["mode"]
         rep_lat, rep_lon = self._reported_position(d_data)
@@ -445,15 +449,90 @@ class OrionFleetSimulator:
             d["target_mode"] = None
             trust_evaluator.drone_history.pop(drone_id, None)
 
+    def deploy_drone(self, db: Optional[Any] = None, operator_id: str = "OPERATOR_1") -> Dict[str, Any]:
+        """
+        Deploys a new drone in the Base Forward zone (Base Forward Alpha).
+        The drone starts loitering safely in the base forward zone, ready for operator commands.
+        """
+        drone_id = self._next_drone_id
+        while drone_id in self.drones:
+            drone_id += 1
+        self._next_drone_id = drone_id + 1
+
+        base_lat = theatre_rules.home_base["lat"]
+        base_lon = theatre_rules.home_base["lon"]
+        base_alt = 120.0
+
+        # Small radial jitter (20m - 60m) so multiple base-deployed drones don't visually overlap perfectly
+        angle = random.uniform(0.0, 2.0 * math.pi)
+        dist_m = random.uniform(20.0, 60.0)
+        dlat = (dist_m * math.cos(angle)) / 111139.0
+        dlon = (dist_m * math.sin(angle)) / (111139.0 * math.cos(math.radians(base_lat)))
+        lat = round(base_lat + dlat, 6)
+        lon = round(base_lon + dlon, 6)
+
+        self.drones[drone_id] = {
+            "lat": lat,
+            "lon": lon,
+            "alt": base_alt,
+            "heading": round(math.degrees(angle), 1),
+            "speed": 0.0,
+            "offset_angle": angle,
+            "spoofed": False,
+            "spoof_offset": (0.0, 0.0),
+            "jammed": False,
+            "mode": "LOITER",
+            "loiter_until": float("inf"),
+            "egress_waypoints": [],
+            "landed_until": 0.0,
+            "safe_airspace_time": 0.0,
+            "patrol_zone_id": 100,
+            "hold_point": [lat, lon],
+            "on_orbit": False,
+            "battery_used": 0.0,
+        }
+
+        if db:
+            aar_service.log_event(
+                db=db,
+                event_type="DRONE_DEPLOYED",
+                drone_id=drone_id,
+                details={
+                    "location": "Base Forward Alpha",
+                    "coordinates": [lat, lon],
+                    "description": f"Drone {drone_id} deployed in Base Forward zone (mode: LOITER)",
+                    "mission_time_s": self.elapsed_time,
+                },
+                operator_id=operator_id,
+            )
+
+        logger.info("Drone %d deployed in Base Forward zone at (%.6f, %.6f)", drone_id, lat, lon)
+        return {
+            "status": "DRONE_DEPLOYED",
+            "drone_id": drone_id,
+            "location": [lat, lon],
+            "mode": "LOITER",
+        }
+
     # -----------------------------------------------------------------
     # Battlefield Event Triggers (Used by both Random Loop & Manual API)
     # -----------------------------------------------------------------
 
     def trigger_gps_spoofing_drone2(self, db, target_drone_id: Optional[int] = None) -> Dict[str, Any]:
         if target_drone_id is None:
-            # Pick a random non-spoofed patrolling drone (fallback to Drone 2)
+            # Pick a random non-spoofed patrolling drone (fallback to Drone 2 if available, or any available)
             candidates = [d_id for d_id, d in self.drones.items() if not d["spoofed"] and d["mode"] == "PATROL"]
-            target_drone_id = random.choice(candidates) if candidates else 2
+            if candidates:
+                target_drone_id = random.choice(candidates)
+            elif 2 in self.drones:
+                target_drone_id = 2
+            elif self.drones:
+                target_drone_id = random.choice(list(self.drones.keys()))
+            else:
+                return {"status": "NO_DRONES_AVAILABLE"}
+
+        if target_drone_id not in self.drones:
+            return {"status": "DRONE_NOT_FOUND", "drone_id": target_drone_id}
 
         d = self.drones[target_drone_id]
         # Spoofing only falsifies the GPS fix: the airframe stays where it is ("lat"/"lon"),
@@ -481,6 +560,8 @@ class OrionFleetSimulator:
 
     def trigger_replay_attack(self, db) -> Dict[str, Any]:
         self.milestones_reached["replay_attack_triggered"] = True
+        if not self.drones:
+            return {"status": "NO_DRONES_AVAILABLE"}
         target_id = random.choice(list(self.drones.keys()))
         past_cmd = {
             "command": "RETURN_TO_HOME",
@@ -497,7 +578,11 @@ class OrionFleetSimulator:
         self.milestones_reached["sector_interference_marked"] = True
         # Pick 2 drones to experience localized EW jamming
         patrolling = [d_id for d_id, d in self.drones.items() if d["mode"] != "LANDED"]
-        affected = random.sample(patrolling, k=min(2, len(patrolling))) if len(patrolling) >= 2 else [1, 3]
+        if not patrolling:
+            if not self.drones:
+                return {"status": "NO_DRONES_AVAILABLE"}
+            patrolling = list(self.drones.keys())
+        affected = random.sample(patrolling, k=min(2, len(patrolling)))
         for d_id in affected:
             self.drones[d_id]["jammed"] = True
 
@@ -876,21 +961,34 @@ class OrionFleetSimulator:
                             operator_id="SYSTEM"
                         )
                     else:
-                        d_data["mode"] = "LANDED"
-                        d_data["spoofed"] = False
-                        d_data["jammed"] = False
-                        d_data["landed_until"] = self.elapsed_time + 10.0
+                        via_desc = {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress")
                         aar_service.log_event(
                             db=db,
                             event_type="DRONE_RECOVERED",
                             drone_id=d_id,
                             details={
                                 "location": "Base Forward Alpha",
-                                "via": {"RTL": "Direct Return-to-Home", "ROUTE": "Computed safe route (A*)"}.get(mode, "Safe Corridor Egress"),
+                                "description": f"Drone {d_id} completed retreat to Base Forward Alpha and was recovered (disappeared).",
+                                "via": via_desc,
                                 "mission_time_s": self.elapsed_time
                             },
                             operator_id="SYSTEM"
                         )
+                        pending = (
+                            db.query(ActionRecommendation)
+                            .filter(ActionRecommendation.drone_id == d_id, ActionRecommendation.status == "PENDING")
+                            .all()
+                        )
+                        for rec in pending:
+                            rec.status = "SUPERSEDED"
+                        if pending:
+                            db.commit()
+
+                        trust_evaluator.drone_history.pop(d_id, None)
+                        trust_evaluator.affected_drones_in_sector.discard(d_id)
+                        del self.drones[d_id]
+                        logger.info("Drone %d completed retreat to Base Forward zone and disappeared.", d_id)
+                        return
             else:
                 d_data["lat"] += (dlat / dist_deg) * step
                 d_data["lon"] += (dlon / dist_deg) * step
@@ -1198,8 +1296,10 @@ class OrionFleetSimulator:
                     )
 
                 self._coordinate_patrol(db)
-                for d_id, d_data in self.drones.items():
+                for d_id, d_data in list(self.drones.items()):
                     self._move_drone(db, d_id, d_data, dt)
+                    if d_id not in self.drones:
+                        continue
                     self._update_drone_recalibration(db, d_id, d_data, dt)
                     wx = weather.weather_at(theatre_rules.active_weather_zones(), d_data["lat"], d_data["lon"], haversine_distance_m)
                     d_data["weather_now"] = wx
@@ -1207,7 +1307,9 @@ class OrionFleetSimulator:
                     wx_fx = weather.effects(wx)
                     if d_data["mode"] != "LANDED":
                         d_data["battery_used"] = (d_data.get("battery_used", 0.0) + 0.08 * dt * wx_fx["battery_mult"]) % 80.0
-                    fleet_telemetry.append({**self.get_telemetry(d_id), "source": "SIM"})
+                    telem = self.get_telemetry(d_id)
+                    if telem:
+                        fleet_telemetry.append({**telem, "source": "SIM"})
 
                 # External MAVLink vehicles (SITL, real drones) join the fleet read-only.
                 fleet_telemetry.extend(mavlink_input.snapshot())

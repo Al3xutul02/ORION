@@ -20,7 +20,7 @@ def get_fleet_overview():
     yellow_count = 0
     red_count = 0
 
-    fleet_telemetry = [simulator.get_telemetry(d_id) for d_id in simulator.drones]
+    fleet_telemetry = [t for d_id in list(simulator.drones.keys()) if (t := simulator.get_telemetry(d_id)) is not None]
 
     for telem in fleet_telemetry:
         d_id = telem["drone_id"]
@@ -131,3 +131,10 @@ def ingest_telemetry(payload: TelemetryCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(entry)
     return entry
+
+
+@router.post("/deploy")
+def deploy_drone(db: Session = Depends(get_db)):
+    """Deploys a new drone in the Base Forward zone."""
+    res = simulator.deploy_drone(db=db)
+    return res

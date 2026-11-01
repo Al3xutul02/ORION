@@ -98,6 +98,13 @@ def trigger_weather_clear_scenario(db: Session = Depends(get_db)):
     return {**res, "status": "weather_cleared"}
 
 
+@router.post("/deploy-drone")
+def deploy_drone_scenario(db: Session = Depends(get_db)):
+    """Deploys a new drone in the Base Forward zone."""
+    res = simulator.deploy_drone(db=db)
+    return res
+
+
 from typing import Optional
 from pydantic import BaseModel, Field
 

@@ -77,6 +77,10 @@ export class OrionApi {
     );
   }
 
+  deployDrone() {
+    return firstValueFrom(this.http.post<{ status: string; drone_id: number; location: number[]; mode: string }>(`${this.base}/drones/deploy`, {}));
+  }
+
   createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/patrol`, body));
   }

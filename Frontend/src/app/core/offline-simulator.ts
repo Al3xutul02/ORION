@@ -1,4 +1,4 @@
-import { ActionOption, circleRing, evaluateActions, egressPaths, distanceM, hazardZones, orderPolygonVertices, segmentIntersectsCircle, weatherAt } from './geo';
+import { ActionOption, circleRing, evaluateActions, egressPaths, distanceM, hazardZones, orderPolygonVertices, planTargetRoute, segmentIntersectsCircle, weatherAt } from './geo';
 import { WEATHER_TEMPLATES, describeWeather, isSevereWeather, isWeather, weatherEffects } from './platform';
 import { computeMesh, describeMesh } from './mesh';
 import { HOLD_CLIMB_M, holdPoint, isOnOrbit, spacingRates } from './patrol';
@@ -93,6 +93,8 @@ interface SimDrone {
   patrol_zone_id?: number;
   targetMode?: 'PATROL' | 'LOITER';
   targetPoint?: [number, number];
+  targetZoneId?: number;
+  pathType?: 'SAFE' | 'RISKY';
   mode: 'PATROL' | 'LOITER' | 'EGRESS' | 'LANDED';
   loiterUntil: number;
   egressPath: [number, number][]; // [lon, lat]
@@ -180,7 +182,7 @@ export class OfflineSimulator {
     ];
     this.drones = fleet.map(([sector, angle], i) => ({
       id: i + 1, sector, angle, lat: 0, lon: 0, spoofedAt: null, jammedAt: null, linkLostAt: null, failsafeDone: false,
-      safeAirspaceTime: 0, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
+      safeAirspaceTime: 0, patrol_zone_id: sector === SECTORS.B ? 100 : 10, mode: 'PATROL', loiterUntil: 0, egressPath: [], egressLeg: 0, route: 'CORRIDOR',
       batteryUsed: 0, weatherAlert: null, onOrbit: true, patrolRate: ANGULAR_SPEED,
       repositioning: false, altitude: CRUISE_ALT_M,
     }));
@@ -322,12 +324,66 @@ export class OfflineSimulator {
     return zone;
   }
 
+  deployDrone(): SimDrone {
+    const nextId = Math.max(0, ...this.drones.map(d => d.id)) + 1;
+    const baseLat = 44.316;
+    const baseLon = 23.8;
+    const angle = Math.random() * 2 * Math.PI;
+    const distM = 20 + Math.random() * 40;
+    const dlat = (distM * Math.cos(angle)) / 111139.0;
+    const dlon = (distM * Math.sin(angle)) / (111139.0 * Math.cos((baseLat * Math.PI) / 180));
+    const lat = Number((baseLat + dlat).toFixed(6));
+    const lon = Number((baseLon + dlon).toFixed(6));
+
+    const newDrone: SimDrone = {
+      id: nextId,
+      sector: SECTORS.A,
+      angle: 0,
+      lat,
+      lon,
+      spoofedAt: null,
+      jammedAt: null,
+      linkLostAt: null,
+      failsafeDone: false,
+      safeAirspaceTime: 0,
+      patrol_zone_id: 10,
+      mode: 'LOITER',
+      loiterUntil: Infinity,
+      egressPath: [],
+      egressLeg: 0,
+      route: 'CORRIDOR',
+      batteryUsed: 0,
+      weatherAlert: null,
+      onOrbit: false,
+      patrolRate: 0.08,
+      holdPoint: [lat, lon],
+      repositioning: false,
+      altitude: 120,
+    };
+    this.drones.push(newDrone);
+    this.log(
+      'DRONE_DEPLOYED',
+      nextId,
+      {
+        location: 'Base Forward Alpha',
+        coordinates: [lat, lon],
+        description: `Drone ${nextId} deployed in Base Forward zone (mode: LOITER)`,
+        mission_time_s: this.elapsed,
+      },
+      'OPERATOR_1',
+    );
+    return newDrone;
+  }
+
   executeZoneTactic(zoneId: number, tactic: string, operatorId = 'OPERATOR_1'): { ok: boolean; message: string } {
     const pz = this.zones.find(z => z.id === zoneId && z.zone_type === 'PATROL');
     if (!pz) return { ok: false, message: 'Patrol zone not found.' };
 
     const tacticUpper = tactic.toUpperCase();
-    const zoneDrones = this.drones.filter(d => (d.patrol_zone_id ?? 10) === zoneId || zoneId === 10 || zoneId === 100);
+    let zoneDrones = this.drones.filter(d => (d.patrol_zone_id ?? (d.sector === SECTORS.B ? 100 : 10)) === zoneId);
+    if (!zoneDrones.length && (zoneId === 10 || zoneId === 100)) {
+      zoneDrones = this.drones.filter(d => d.sector === SECTORS.A);
+    }
 
     if (tacticUpper === 'SECTOR_ORBIT_SHIFT') {
       const jammer = this.zones.find(z => z.is_active && z.zone_type === 'INTERFERENCE' && z.center && z.radius_m);
@@ -342,7 +398,12 @@ export class OfflineSimulator {
       } else if (pz.center) {
         pz.center = [pz.center[0] + 0.002, pz.center[1] + 0.002];
       }
-      if (pz.center) SECTORS.A.center = { lat: pz.center[0], lon: pz.center[1] };
+      if (pz.center) {
+        SECTORS.A.center = { lat: pz.center[0], lon: pz.center[1] };
+        for (const d of zoneDrones) {
+          if (d.sector) d.sector.center = { lat: pz.center[0], lon: pz.center[1] };
+        }
+      }
       for (const d of zoneDrones) {
         d.jammedAt = null;
         d.spoofedAt = null;
@@ -360,6 +421,7 @@ export class OfflineSimulator {
       const scale = pz.radius_m / 350;
       SECTORS.A.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
       for (const d of zoneDrones) {
+        if (d.sector) d.sector.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
         d.onOrbit = false;
         if (d.mode === 'LOITER') d.mode = 'PATROL';
       }
@@ -373,6 +435,7 @@ export class OfflineSimulator {
       const scale = pz.radius_m / 350;
       SECTORS.A.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
       for (const d of zoneDrones) {
+        if (d.sector) d.sector.orbit = { lat: 0.003 * scale, lon: 0.004 * scale };
         d.onOrbit = false;
         if (d.mode === 'LOITER') d.mode = 'PATROL';
       }
@@ -775,11 +838,18 @@ export class OfflineSimulator {
     }
     this.recs = [...this.recs];
     this.cb.onRecommendations(this.recs);
-    const seq = this.dispatch(droneId, action, operatorId);
+    const seq = this.dispatch(droneId, action, operatorId, targetZoneId, targetPoint, pathType);
     return { ok: true, message: `Signed ${action} sent to Drone ${droneId} (seq ${seq}).` };
   }
 
-  private dispatch(droneId: number, action: string, operatorId: string): number {
+  private dispatch(
+    droneId: number,
+    action: string,
+    operatorId: string,
+    targetZoneId?: number,
+    targetPoint?: [number, number],
+    pathType: 'SAFE' | 'RISKY' = 'SAFE',
+  ): number {
     const seq = this.commandSeq++;
     this.log('COMMAND_EXECUTED', droneId, {
       command: action, sequence: seq, signed: true, signing: 'MAVLINK2_HMAC_SHA256',
@@ -787,6 +857,9 @@ export class OfflineSimulator {
 
     const d = this.drone(droneId);
     d.safeAirspaceTime = 0;
+    d.targetMode = undefined;
+    d.targetPoint = undefined;
+    d.targetZoneId = undefined;
     const state = this.states().find(s => s.drone_id === droneId)!;
     const paths = egressPaths(state, this.zones);
     d.egressLeg = 0;
@@ -823,6 +896,68 @@ export class OfflineSimulator {
         d.loiterUntil = this.elapsed + 8;
         d.egressPath = paths.viaCorridor;
         break;
+      case 'JOIN_PATROL': {
+        const zid = targetZoneId ?? d.patrol_zone_id ?? 10;
+        let pZone = this.zones.find(z => z.id === zid && z.is_active && z.zone_type === 'PATROL');
+        if (!pZone) {
+          pZone = this.zones.find(z => z.is_active && z.zone_type === 'PATROL');
+        }
+        if (pZone && pZone.center) {
+          const [cLat, cLon] = pZone.center;
+          const rM = pZone.radius_m ?? 350;
+          const cosLat = Math.cos((cLat * Math.PI) / 180);
+          const ang = Math.atan2(d.lat - cLat, d.lon - cLon);
+          const rLat = rM / 111139.0;
+          const rLon = rM / (111139.0 * (cosLat || 1));
+          const entryLat = cLat + rLat * Math.sin(ang);
+          const entryLon = cLon + rLon * Math.cos(ang);
+          const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+          const repLat = d.lat + off.lat;
+          const repLon = d.lon + off.lon;
+          const route = planTargetRoute([repLat, repLon], [entryLat, entryLon], this.zones, pathType);
+          d.route = 'ROUTE';
+          d.targetMode = 'PATROL';
+          d.targetZoneId = pZone.id;
+          d.patrol_zone_id = pZone.id;
+          d.pathType = pathType;
+          d.egressLeg = 0;
+          if (route && route.waypoints.length > 1) {
+            d.egressPath = route.waypoints.map(([la, lo]) => [lo, la] as [number, number]);
+          } else {
+            d.egressPath = [[repLon, repLat], [entryLon, entryLat]];
+          }
+          d.mode = 'EGRESS';
+        }
+        break;
+      }
+      case 'LOITER_AT': {
+        const tPt: [number, number] = targetPoint && targetPoint.length === 2 ? targetPoint : [d.lat, d.lon];
+        const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+        const repLat = d.lat + off.lat;
+        const repLon = d.lon + off.lon;
+        const route = planTargetRoute([repLat, repLon], [tPt[0], tPt[1]], this.zones, pathType);
+        d.route = 'ROUTE';
+        d.targetMode = 'LOITER';
+        d.targetPoint = [tPt[0], tPt[1]];
+        d.pathType = pathType;
+        d.egressLeg = 0;
+        if (route && route.waypoints.length > 1) {
+          d.egressPath = route.waypoints.map(([la, lo]) => [lo, la] as [number, number]);
+        } else {
+          d.egressPath = [[repLon, repLat], [tPt[1], tPt[0]]];
+        }
+        d.mode = 'EGRESS';
+        break;
+      }
+      case 'SECTOR_ORBIT_SHIFT':
+      case 'TIGHT_MESH':
+      case 'WIDE_RECON':
+      case 'RESYNC_EQUIDISTANT':
+      case 'EGRESS_CORRIDOR': {
+        const zid = targetZoneId ?? d.patrol_zone_id ?? 10;
+        this.executeZoneTactic(zid, action, operatorId);
+        break;
+      }
       case 'CONTINUE_PATROL': {
         // Rejoin the orbit at the nearest point instead of jumping back to the old one.
         const { center, orbit } = d.sector;
@@ -903,9 +1038,25 @@ export class OfflineSimulator {
       d.safeAirspaceTime = 0;
       if (wasSpoofed && d.egressPath.length > 0 && (d.mode === 'LOITER' || d.mode === 'EGRESS')) {
         // Recompute egress route from the restored true physical position
-        const state = this.states().find(s => s.drone_id === d.id)!;
-        const paths = egressPaths(state, this.zones);
-        d.egressPath = d.route === 'RTL' ? paths.direct : d.route === 'ROUTE' ? paths.viaRoute : paths.viaCorridor;
+        const pathType = d.pathType ?? 'SAFE';
+        if (d.targetMode === 'PATROL') {
+          const pz = this.zones.find(z => z.id === d.patrol_zone_id && z.is_active && z.zone_type === 'PATROL');
+          if (pz && pz.center) {
+            const route = planTargetRoute([d.lat, d.lon], [pz.center[0], pz.center[1]], this.zones, pathType);
+            d.egressPath = route && route.waypoints.length > 1
+              ? route.waypoints.map(([la, lo]) => [lo, la] as [number, number])
+              : [[d.lon, d.lat], [pz.center[1], pz.center[0]]];
+          }
+        } else if (d.targetMode === 'LOITER' && d.targetPoint) {
+          const route = planTargetRoute([d.lat, d.lon], d.targetPoint, this.zones, pathType);
+          d.egressPath = route && route.waypoints.length > 1
+            ? route.waypoints.map(([la, lo]) => [lo, la] as [number, number])
+            : [[d.lon, d.lat], [d.targetPoint[1], d.targetPoint[0]]];
+        } else {
+          const state = this.states().find(s => s.drone_id === d.id)!;
+          const paths = egressPaths(state, this.zones);
+          d.egressPath = d.route === 'RTL' ? paths.direct : d.route === 'ROUTE' ? paths.viaRoute : paths.viaCorridor;
+        }
         d.egressLeg = 0;
       }
       this.log('GPS_RESTORED', d.id, {
@@ -1060,16 +1211,25 @@ export class OfflineSimulator {
   /** Keeps each sector's orbit evenly spaced; logs when a drone joins or leaves it. */
   private coordinatePatrol(): void {
     const members = new Map<string, Set<number>>();
-    for (const sector of Object.values(SECTORS)) {
-      const onOrbit = this.drones.filter(d => d.sector === sector && d.mode === 'PATROL' && d.onOrbit);
+    const sectorsByName = new Map<string, Sector>();
+    for (const s of Object.values(SECTORS)) {
+      sectorsByName.set(s.name, s);
+    }
+    for (const d of this.drones) {
+      if (d.sector && !sectorsByName.has(d.sector.name)) {
+        sectorsByName.set(d.sector.name, d.sector);
+      }
+    }
+    for (const [sName, sector] of sectorsByName) {
+      const onOrbit = this.drones.filter(d => d.sector?.name === sName && d.mode === 'PATROL' && d.onOrbit);
       const rates = spacingRates(new Map(onOrbit.map(d => [d.id, d.angle])), ANGULAR_SPEED);
-      for (const d of onOrbit) d.patrolRate = rates.get(d.id)!;
-      members.set(sector.name, new Set(onOrbit.map(d => d.id)));
+      for (const d of onOrbit) d.patrolRate = rates.get(d.id) ?? ANGULAR_SPEED;
+      members.set(sName, new Set(onOrbit.map(d => d.id)));
     }
     const previous = this.patrolMembers;
     this.patrolMembers = members;
     for (const [sector, now] of members) {
-      const before = previous.get(sector)!;
+      const before = previous.get(sector) ?? new Set<number>();
       const joined = [...now].filter(i => !before.has(i)).sort((a, b) => a - b);
       const left = [...before].filter(i => !now.has(i)).sort((a, b) => a - b);
       if (!joined.length && !left.length) continue;
@@ -1124,8 +1284,30 @@ export class OfflineSimulator {
     }
     if (d.mode === 'EGRESS' && d.route === 'ROUTE' && this.routeLegBlocked(d)) {
       // A zone moved onto the planned route: re-plan from here, or hold if nothing is safe.
-      const state = this.states().find(s => s.drone_id === d.id)!;
-      const replanned = egressPaths(state, this.zones).viaRoute;
+      const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
+      const curLat = d.lat + off.lat;
+      const curLon = d.lon + off.lon;
+      let replanned: [number, number][] = [];
+      const pathType = d.pathType ?? 'SAFE';
+
+      if (d.targetMode === 'PATROL') {
+        const pz = this.zones.find(z => z.id === d.patrol_zone_id && z.is_active && z.zone_type === 'PATROL');
+        if (pz && pz.center) {
+          const route = planTargetRoute([curLat, curLon], [pz.center[0], pz.center[1]], this.zones, pathType);
+          if (route && route.waypoints.length > 1) {
+            replanned = route.waypoints.map(([la, lo]) => [lo, la] as [number, number]);
+          }
+        }
+      } else if (d.targetMode === 'LOITER' && d.targetPoint) {
+        const route = planTargetRoute([curLat, curLon], d.targetPoint, this.zones, pathType);
+        if (route && route.waypoints.length > 1) {
+          replanned = route.waypoints.map(([la, lo]) => [lo, la] as [number, number]);
+        }
+      } else {
+        const state = this.states().find(s => s.drone_id === d.id)!;
+        replanned = egressPaths(state, this.zones).viaRoute;
+      }
+
       d.egressLeg = 0;
       if (replanned.length) {
         d.egressPath = replanned;
@@ -1158,8 +1340,57 @@ export class OfflineSimulator {
         }
       }
       if (d.egressLeg >= d.egressPath.length - 1) {
-        d.mode = 'LANDED';
-        this.log('DRONE_RECOVERED', d.id, { location: 'Base Forward Alpha', via: d.route === 'RTL' ? 'Direct return-to-home' : d.route === 'ROUTE' ? 'Computed safe route (A*)' : 'Safe Corridor Alpha' });
+        const targetMode = d.targetMode;
+        if (targetMode === 'PATROL') {
+          d.mode = 'PATROL';
+          d.targetMode = undefined;
+          d.egressPath = [];
+          d.egressLeg = 0;
+          d.spoofedAt = null;
+          d.jammedAt = null;
+          d.onOrbit = false;
+          const pz = this.zones.find(z => z.id === d.patrol_zone_id && z.is_active && z.zone_type === 'PATROL');
+          if (pz && pz.center) {
+            const [cLat, cLon] = pz.center;
+            const rM = pz.radius_m || 350;
+            const cosLat = Math.cos((cLat * Math.PI) / 180);
+            d.sector = {
+              name: pz.name,
+              center: { lat: cLat, lon: cLon },
+              orbit: {
+                lat: (rM / 111139.0) * 0.9,
+                lon: (rM / (111139.0 * (cosLat || 1))) * 0.9,
+              },
+            };
+            d.angle = Math.atan2((d.lat - cLat) / d.sector.orbit.lat, (d.lon - cLon) / d.sector.orbit.lon);
+          }
+          this.log('DRONE_JOINED_PATROL', d.id, {
+            zone_id: d.patrol_zone_id,
+            zone_name: pz?.name ?? 'Patrol Zone',
+            path_type: d.pathType ?? 'SAFE',
+            mission_time_s: this.elapsed,
+          });
+        } else if (targetMode === 'LOITER') {
+          d.mode = 'LOITER';
+          d.loiterUntil = Infinity;
+          d.holdPoint = d.targetPoint ?? [d.lat, d.lon];
+          d.targetMode = undefined;
+          d.egressPath = [];
+          d.egressLeg = 0;
+          this.log('DRONE_LOITER_HOLD', d.id, {
+            location: d.holdPoint,
+            path_type: d.pathType ?? 'SAFE',
+            mission_time_s: this.elapsed,
+          });
+        } else {
+          this.log('DRONE_RECOVERED', d.id, {
+            location: 'Base Forward Alpha',
+            description: `Drone ${d.id} completed retreat to Base Forward zone and was recovered (disappeared).`,
+            via: d.route === 'RTL' ? 'Direct return-to-home' : d.route === 'ROUTE' ? 'Computed safe route (A*)' : 'Safe Corridor Alpha',
+          });
+          this.drones = this.drones.filter(item => item.id !== d.id);
+          this.recs = this.recs.filter(r => r.drone_id !== d.id);
+        }
       }
     }
   }
@@ -1170,7 +1401,11 @@ export class OfflineSimulator {
     if (!target) return false;
     const off = d.spoofedAt !== null ? SPOOF_OFFSET : { lat: 0, lon: 0 };
     const lat = d.lat + off.lat, lon = d.lon + off.lon;
-    return hazardZones(this.zones).some(z =>
+    const pathType = d.pathType ?? 'SAFE';
+    const checkZones = pathType === 'RISKY'
+      ? this.zones.filter(z => z.is_active && z.zone_type === 'THREAT' && z.center && z.radius_m)
+      : hazardZones(this.zones);
+    return checkZones.some(z =>
       distanceM(lat, lon, z.center![0], z.center![1]) > z.radius_m! &&
       segmentIntersectsCircle(lat, lon, target[1], target[0], z.center![0], z.center![1], z.radius_m!));
   }
@@ -1262,6 +1497,7 @@ export class OfflineSimulator {
         fix_type: fix, satellites_visible: sats, eph,
         battery_remaining: Math.round(Math.max(20, 100 - d.batteryUsed) * 10) / 10,
         drop_rate_comm: drop, rssi, flight_mode: flightMode, is_armed: d.mode !== 'LANDED',
+        patrol_zone_id: d.patrol_zone_id ?? (d.sector === SECTORS.B ? 100 : 10),
         trust_score: score, trust_status: status, uncertainty_radius_m: unc, reason,
         scores: {
           drone_id: d.id, trust_score: score, trust_status: status, gps_score: gps, imu_score: imu,

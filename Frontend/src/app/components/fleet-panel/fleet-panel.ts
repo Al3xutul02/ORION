@@ -19,6 +19,10 @@ interface Signal {
 export class FleetPanel {
   protected store = inject(OrionStore);
 
+  protected deployDrone(): void {
+    this.store.deployDrone();
+  }
+
   protected signals(d: DroneState): Signal[] {
     const s = d.scores;
     if (!s) return [];

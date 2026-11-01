@@ -73,6 +73,12 @@ const ACTION_RO: Record<string, string> = {
   RETURN_TO_HOME: 'întoarcerea la bază',
   CONTINUE_PATROL: 'reluarea patrulei',
   SECTOR_ORBIT_SHIFT: 'mutarea orbitei',
+  JOIN_PATROL: 'alăturarea la patrulă',
+  LOITER_AT: 'deplasare și loiter',
+  TIGHT_MESH: 'strângerea formației (mesh dens)',
+  WIDE_RECON: 'dispersare cercetare extinsă',
+  RESYNC_EQUIDISTANT: 'resincronizare faze',
+  EGRESS_CORRIDOR: 'retragere de urgență pe coridor',
 };
 export const actionRo = (a: string) => ACTION_RO[a] ?? a.replaceAll('_', ' ').toLowerCase();
 

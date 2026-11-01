@@ -87,7 +87,9 @@ export class DecisionPanel {
   }
 
   protected joinPatrol(droneId: number): void {
-    const zid = this.selectedPatrolZoneId() ?? this.patrolZones()[0]?.id;
+    const pzs = this.patrolZones();
+    const selected = this.selectedPatrolZoneId();
+    const zid = selected !== null && pzs.some(z => z.id === selected) ? selected : pzs[0]?.id;
     this.store.commandDrone(droneId, 'JOIN_PATROL', zid, undefined, this.pathType());
   }
 
