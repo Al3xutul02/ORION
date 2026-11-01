@@ -125,13 +125,13 @@ def create_patrol_zone(payload: CreatePatrolZoneRequest, db: Session = Depends(g
             "center": zone["center"],
             "radius_m": zone["radius_m"]
         },
-        operator_id="OPERATOR_1"
+        operator_id=payload.operator_id or "operator_demo"
     )
     return zone
 
 
 @router.delete("/{zone_id}")
-def delete_zone(zone_id: int, db: Session = Depends(get_db)):
+def delete_zone(zone_id: int, operator_id: str = "operator_demo", db: Session = Depends(get_db)):
     """Deletes / clears a tactical zone by id (e.g. operator-deleted patrol zone)."""
     zone = theatre_rules.get_zone(zone_id)
     if not zone:
@@ -153,7 +153,7 @@ def delete_zone(zone_id: int, db: Session = Depends(get_db)):
             "name": zone.get("name"),
             "zone_type": zone.get("zone_type")
         },
-        operator_id="OPERATOR_1"
+        operator_id=operator_id or "operator_demo"
     )
     return {"status": "DELETED", "id": zone_id}
 
@@ -179,7 +179,7 @@ def create_threat_zone(payload: CreateThreatZoneRequest, db: Session = Depends(g
             "center": zone.get("center"),
             "radius_m": zone.get("radius_m")
         },
-        operator_id="OPERATOR_1"
+        operator_id=payload.operator_id or "operator_demo"
     )
     return zone
 
@@ -200,7 +200,7 @@ def create_safe_corridor(payload: CreateSafeCorridorRequest, db: Session = Depen
             "name": zone["name"],
             "waypoints": zone["waypoints"]
         },
-        operator_id="OPERATOR_1"
+        operator_id=payload.operator_id or "operator_demo"
     )
     return zone
 
@@ -221,7 +221,7 @@ def create_objective_zone(payload: CreateObjectiveZoneRequest, db: Session = Dep
             "name": zone["name"],
             "waypoints": zone["waypoints"]
         },
-        operator_id="OPERATOR_1"
+        operator_id=payload.operator_id or "operator_demo"
     )
     return zone
 
@@ -230,7 +230,7 @@ def create_objective_zone(payload: CreateObjectiveZoneRequest, db: Session = Dep
 def execute_zone_tactic(payload: ExecuteZoneTacticRequest, db: Session = Depends(get_db)):
     """Executes a swarm tactical maneuver for an active patrol zone."""
     from app.services.simulator import simulator
-    res = simulator.apply_zone_tactic(db, payload.zone_id, payload.tactic, operator_id="OPERATOR_1")
+    res = simulator.apply_zone_tactic(db, payload.zone_id, payload.tactic, operator_id=payload.operator_id or "operator_demo")
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=404, detail=res.get("message"))
     aar_service.log_event(
@@ -242,6 +242,6 @@ def execute_zone_tactic(payload: ExecuteZoneTacticRequest, db: Session = Depends
             "tactic": payload.tactic,
             "result": res
         },
-        operator_id="OPERATOR_1"
+        operator_id=payload.operator_id or "operator_demo"
     )
     return res

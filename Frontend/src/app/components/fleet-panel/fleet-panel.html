@@ -1,13 +1,15 @@
 <section class="panel">
   <header class="panel-head">
     <h2>Fleet trust</h2>
-    <button
-      type="button"
-      class="btn sm primary deploy-btn"
-      (click)="deployDrone()"
-      [disabled]="store.busy()"
-      title="Deploy a new drone in Base Forward zone"
-    >Deploy Drone</button>
+    @if (store.isOperator()) {
+      <button
+        type="button"
+        class="btn sm primary deploy-btn"
+        (click)="deployDrone()"
+        [disabled]="store.busy()"
+        title="Deploy a new drone in Base Forward zone"
+      >Deploy Drone</button>
+    }
     <span class="spacer"></span>
     @let c = store.fleetCounts();
     <span class="chip green" title="Trusted">{{ c.green }}</span>

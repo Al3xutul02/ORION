@@ -17,7 +17,7 @@ export class DecisionPanel {
   protected store = inject(OrionStore);
 
   /** Active sub-tab: 'commands' (default) or 'suggestions'. */
-  protected activeTab = signal<DecisionTab>('commands');
+  protected activeTab = signal<DecisionTab>(this.store.isOperator() ? 'commands' : 'suggestions');
 
   /** Action awaiting the operator's second click in the Commands tab. */
   protected confirming = signal<ActionOption['id'] | null>(null);
@@ -105,17 +105,24 @@ export class DecisionPanel {
   }
 
   constructor() {
-    // Switching drones cancels a half-finished confirmation and displays the commands tab.
+    // Switching drones cancels a half-finished confirmation and displays the commands tab if operator.
     effect(() => {
       const id = this.store.selectedDroneId();
       this.confirming.set(null);
-      if (id !== null) {
+      if (id !== null && this.store.isOperator()) {
         this.activeTab.set('commands');
+      }
+    });
+
+    effect(() => {
+      if (!this.store.isOperator() && this.activeTab() === 'commands') {
+        this.activeTab.set('suggestions');
       }
     });
   }
 
   protected setTab(tab: DecisionTab): void {
+    if (tab === 'commands' && !this.store.isOperator()) return;
     this.activeTab.set(tab);
   }
 

@@ -3,7 +3,7 @@ import { ORION_CONFIG } from './config';
 import { ActionOption, distanceM, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
-  AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, MapMode, Recommendation, SocketMessage, Zone,
+  AppUser, AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, MapMode, Recommendation, SocketMessage, Zone,
 } from './models';
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
@@ -87,6 +87,63 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
 @Injectable({ providedIn: 'root' })
 export class OrionStore implements OnDestroy {
   private api = inject(OrionApi);
+
+  readonly currentUser = signal<AppUser | null>(this.loadPersistedUser());
+  readonly isOperator = computed(() => this.currentUser()?.role === 'OPERATOR');
+  readonly isCommander = computed(() => this.currentUser()?.role === 'COMMANDER');
+
+  private loadPersistedUser(): AppUser | null {
+    try {
+      const raw = sessionStorage.getItem('orion.user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async login(username: string, password: string): Promise<{ ok: boolean; message?: string }> {
+    try {
+      let user: AppUser | null = null;
+      if (this.mode() === 'live') {
+        try {
+          user = await this.api.login(username, password);
+        } catch (e: any) {
+          if (e?.status === 401) {
+            return { ok: false, message: 'Invalid username or password' };
+          }
+        }
+      }
+      if (!user) {
+        if (username === 'operator_demo' && password === '123') {
+          user = { username: 'operator_demo', role: 'OPERATOR', displayName: 'Operator Demo' };
+        } else if (username === 'commander_demo' && password === '123') {
+          user = { username: 'commander_demo', role: 'COMMANDER', displayName: 'Commander Demo' };
+        } else {
+          return { ok: false, message: 'Invalid username or password' };
+        }
+      }
+
+      this.currentUser.set(user);
+      try {
+        sessionStorage.setItem('orion.user', JSON.stringify(user));
+      } catch {}
+      this.pushToast('ok', `Logged in as ${user.displayName}`, `Access Level: ${user.role}`);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, message: err?.message || 'Authentication failed' };
+    }
+  }
+
+  logout(): void {
+    const prev = this.currentUser();
+    this.currentUser.set(null);
+    try {
+      sessionStorage.removeItem('orion.user');
+    } catch {}
+    if (prev) {
+      this.pushToast('info', 'Logged out', `Session ended for ${prev.username}`);
+    }
+  }
 
   readonly mode = signal<DataMode>(this.savedMode());
   readonly link = signal<LinkState>('connecting');
@@ -340,6 +397,10 @@ export class OrionStore implements OnDestroy {
 
   /** Starts a fresh Demo run where an adversary, not the fixed script, stages the attacks. */
   async startTraining(): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can enter AI Training.');
+      return;
+    }
     if (this.mode() !== 'offline') this.setMode('offline');
     await this.reset();
     if (!this.offline) return;
@@ -559,11 +620,16 @@ export class OrionStore implements OnDestroy {
   }
 
   async deployDrone(): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can deploy drones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
     if (this.offline) {
-      const drone = this.offline.deployDrone();
+      const drone = this.offline.deployDrone(username);
       this.pushToast('ok', 'Drone deployed', `Drone ${drone.id} launched at Base Forward Alpha.`);
     } else {
-      const res = await this.call(() => this.api.deployDrone());
+      const res = await this.call(() => this.api.deployDrone(username));
       if (res) {
         this.pushToast('ok', 'Drone deployed', `Drone ${res.drone_id} launched at Base Forward Alpha.`);
       }
@@ -593,13 +659,18 @@ export class OrionStore implements OnDestroy {
       }
       reasonText = option.reason;
     }
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can command drones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
     if (this.offline) {
-      const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId, targetZoneId, targetPoint, pathType);
+      const res = this.offline.command(droneId, action, username, targetZoneId, targetPoint, pathType);
       if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
       return;
     }
     const res = await this.call(() =>
-      this.api.command(droneId, action, reasonText, targetZoneId, targetPoint, pathType),
+      this.api.command(droneId, action, reasonText, targetZoneId, targetPoint, pathType, username),
     );
     if (res?.signed_command) {
       this.pushToast(
@@ -612,12 +683,17 @@ export class OrionStore implements OnDestroy {
   }
 
   async createPatrolZone(name: string, center: [number, number], radiusM: number): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can create patrol zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
     if (this.offline) {
-      this.offline.addPatrolZone(name, center, radiusM);
+      this.offline.addPatrolZone(name, center, radiusM, username);
       this.pushToast('ok', 'Patrol zone created', `${name} (radius ${Math.round(radiusM)} m) active`);
       return;
     }
-    const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM }));
+    const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Patrol zone created', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
     }
@@ -625,12 +701,13 @@ export class OrionStore implements OnDestroy {
   }
 
   async deleteZone(zoneId: number): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
     if (this.offline) {
-      this.offline.deleteZone(zoneId);
+      this.offline.deleteZone(zoneId, username);
       this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
       return;
     }
-    const res = await this.call(() => this.api.deleteZone(zoneId));
+    const res = await this.call(() => this.api.deleteZone(zoneId, username));
     if (res) {
       this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
     }
@@ -638,12 +715,17 @@ export class OrionStore implements OnDestroy {
   }
 
   async createThreatZone(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create threat zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'commander_demo';
     if (this.offline) {
-      this.offline.addThreatZone(name, waypoints);
+      this.offline.addThreatZone(name, waypoints, undefined, undefined, username);
       this.pushToast('warn', 'Threat zone established', `${name} (${waypoints.length} vertices) active`);
       return;
     }
-    const res = await this.call(() => this.api.createThreatZone({ name, waypoints }));
+    const res = await this.call(() => this.api.createThreatZone({ name, waypoints, operator_id: username }));
     if (res) {
       this.pushToast('warn', 'Threat zone established', `${res.name} (${waypoints.length} vertices) active`);
     }
@@ -651,12 +733,17 @@ export class OrionStore implements OnDestroy {
   }
 
   async createSafeCorridor(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create safe corridors.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'commander_demo';
     if (this.offline) {
-      this.offline.addSafeCorridor(name, waypoints);
+      this.offline.addSafeCorridor(name, waypoints, username);
       this.pushToast('ok', 'Safe corridor opened', `${name} (${waypoints.length} waypoints) established`);
       return;
     }
-    const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints }));
+    const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Safe corridor opened', `${res.name} (${waypoints.length} waypoints) established`);
     }
@@ -664,12 +751,17 @@ export class OrionStore implements OnDestroy {
   }
 
   async createObjectiveZone(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create objective zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'commander_demo';
     if (this.offline) {
-      this.offline.addObjectiveZone(name, waypoints);
+      this.offline.addObjectiveZone(name, waypoints, username);
       this.pushToast('ok', 'Objective zone created', `${name} (${waypoints.length} vertices) established`);
       return;
     }
-    const res = await this.call(() => this.api.createObjectiveZone({ name, waypoints }));
+    const res = await this.call(() => this.api.createObjectiveZone({ name, waypoints, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Objective zone created', `${res.name} (${waypoints.length} vertices) established`);
     }
@@ -677,8 +769,9 @@ export class OrionStore implements OnDestroy {
   }
 
   async executeZoneTactic(zoneId: number, tactic: string): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
     if (this.offline) {
-      const res = this.offline.executeZoneTactic(zoneId, tactic);
+      const res = this.offline.executeZoneTactic(zoneId, tactic, username);
       if (res.ok) {
         this.pushToast('ok', 'Tactic executed', res.message);
       } else {
@@ -686,7 +779,7 @@ export class OrionStore implements OnDestroy {
       }
       return;
     }
-    const res = await this.call(() => this.api.executeZoneTactic({ zone_id: zoneId, tactic }));
+    const res = await this.call(() => this.api.executeZoneTactic({ zone_id: zoneId, tactic, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Tactic executed', `${tactic.replaceAll('_', ' ')} executed on Zone #${zoneId}`);
     }
@@ -694,12 +787,13 @@ export class OrionStore implements OnDestroy {
   }
 
   async decide(rec: Recommendation, decision: 'APPROVE' | 'REJECT'): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
     if (this.offline) {
-      const res = this.offline.decide(rec.id, decision, ORION_CONFIG.operatorId);
+      const res = this.offline.decide(rec.id, decision, username);
       if (!res.ok) this.pushToast('warn', 'Decision not applied', res.message);
       return;
     }
-    const res = await this.call(() => this.api.decide(rec.id, decision));
+    const res = await this.call(() => this.api.decide(rec.id, decision, undefined, username));
     if (res?.signed_command) {
       this.pushToast('ok', 'Signed command sent', `${res.signed_command.command} → Drone ${res.signed_command.drone_id} (seq ${res.signed_command.sequence})`);
     }

@@ -83,42 +83,46 @@
   }
 
   <div class="zone-tools" role="group" aria-label="Tactical Zone Controls">
-    <button
-      type="button"
-      class="btn sm tool-btn"
-      [class.active]="store.mapMode() === 'create_patrol'"
-      (click)="toggleMapMode('create_patrol')"
-      title="Create new patrol zone by dragging on map"
-    >
-      + Patrol Zone
-    </button>
-    <button
-      type="button"
-      class="btn sm tool-btn corridor-btn"
-      [class.active]="store.mapMode() === 'create_corridor'"
-      (click)="toggleMapMode('create_corridor')"
-      title="Create new safe corridor by clicking waypoints"
-    >
-      + Safe Corridor
-    </button>
-    <button
-      type="button"
-      class="btn sm tool-btn objective-btn"
-      [class.active]="store.mapMode() === 'create_objective'"
-      (click)="toggleMapMode('create_objective')"
-      title="Create new polygonal objective zone by clicking vertices"
-    >
-      + Objective Zone
-    </button>
-    <button
-      type="button"
-      class="btn sm tool-btn threat-btn"
-      [class.active]="store.mapMode() === 'create_threat'"
-      (click)="toggleMapMode('create_threat')"
-      title="Create new threat zone by dragging on map"
-    >
-      + Threat Zone
-    </button>
+    @if (store.isOperator()) {
+      <button
+        type="button"
+        class="btn sm tool-btn"
+        [class.active]="store.mapMode() === 'create_patrol'"
+        (click)="toggleMapMode('create_patrol')"
+        title="Create new patrol zone by dragging on map"
+      >
+        + Patrol Zone
+      </button>
+    }
+    @if (store.isCommander()) {
+      <button
+        type="button"
+        class="btn sm tool-btn corridor-btn"
+        [class.active]="store.mapMode() === 'create_corridor'"
+        (click)="toggleMapMode('create_corridor')"
+        title="Create new safe corridor by clicking waypoints"
+      >
+        + Safe Corridor
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn objective-btn"
+        [class.active]="store.mapMode() === 'create_objective'"
+        (click)="toggleMapMode('create_objective')"
+        title="Create new polygonal objective zone by clicking vertices"
+      >
+        + Objective Zone
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn threat-btn"
+        [class.active]="store.mapMode() === 'create_threat'"
+        (click)="toggleMapMode('create_threat')"
+        title="Create new threat zone by dragging on map"
+      >
+        + Threat Zone
+      </button>
+    }
     <button
       type="button"
       class="btn sm tool-btn danger"

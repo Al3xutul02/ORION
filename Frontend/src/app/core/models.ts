@@ -211,3 +211,13 @@ export const SCENARIO_EXTENDED: ScenarioStep[] = [
   { at: 145, label: 'Link lost on D5', detail: 'After 5 s ORION applies the failsafe, filtered by zone rules' },
   { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
 ];
+
+
+export type UserRole = 'OPERATOR' | 'COMMANDER';
+
+export interface AppUser {
+  username: string;
+  role: UserRole;
+  displayName: string;
+  token?: string;
+}

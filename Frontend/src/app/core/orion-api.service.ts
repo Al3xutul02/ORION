@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom, timeout } from 'rxjs';
 import { ORION_CONFIG } from './config';
-import { AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
+import { AppUser, AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
 import { AdversaryMoveKind } from './training';
 
 export type SimulationAction =
@@ -25,6 +25,12 @@ export class OrionApi {
   private http = inject(HttpClient);
   private base = ORION_CONFIG.apiV1;
 
+  login(username: string, password: string) {
+    return firstValueFrom(
+      this.http.post<AppUser>(`${this.base}/auth/login`, { username, password }),
+    );
+  }
+
   health() {
     return firstValueFrom(this.http.get<{ status: string; simulator_running: boolean; simulation_time_s: number }>(`${ORION_CONFIG.apiBase}/health`));
   }
@@ -45,11 +51,11 @@ export class OrionApi {
     return firstValueFrom(this.http.get<Recommendation[]>(`${this.base}/actions/recommendations`, { params: { status } }));
   }
 
-  decide(recommendationId: number, decision: 'APPROVE' | 'REJECT', notes?: string) {
+  decide(recommendationId: number, decision: 'APPROVE' | 'REJECT', notes?: string, operatorId: string = ORION_CONFIG.operatorId) {
     return firstValueFrom(
       this.http.post<DecisionResult>(`${this.base}/actions/decide`, {
         recommendation_id: recommendationId,
-        operator_id: ORION_CONFIG.operatorId,
+        operator_id: operatorId,
         decision,
         notes,
       }),
@@ -63,12 +69,13 @@ export class OrionApi {
     targetZoneId?: number,
     targetPoint?: [number, number],
     pathType: 'SAFE' | 'RISKY' = 'SAFE',
+    operatorId: string = ORION_CONFIG.operatorId,
   ) {
     return firstValueFrom(
       this.http.post<DecisionResult>(`${this.base}/actions/command`, {
         drone_id: droneId,
         action,
-        operator_id: ORION_CONFIG.operatorId,
+        operator_id: operatorId,
         notes,
         target_zone_id: targetZoneId,
         target_point: targetPoint,
@@ -77,32 +84,32 @@ export class OrionApi {
     );
   }
 
-  deployDrone() {
-    return firstValueFrom(this.http.post<{ status: string; drone_id: number; location: number[]; mode: string }>(`${this.base}/drones/deploy`, {}));
+  deployDrone(operatorId: string = ORION_CONFIG.operatorId) {
+    return firstValueFrom(this.http.post<{ status: string; drone_id: number; location: number[]; mode: string }>(`${this.base}/drones/deploy`, { operator_id: operatorId }));
   }
 
-  createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number }) {
+  createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/patrol`, body));
   }
 
-  createThreatZone(body: { name?: string; waypoints?: [number, number][]; center?: [number, number]; radius_m?: number }) {
+  createThreatZone(body: { name?: string; waypoints?: [number, number][]; center?: [number, number]; radius_m?: number; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/threat`, body));
   }
 
-  createSafeCorridor(body: { name?: string; waypoints: [number, number][] }) {
+  createSafeCorridor(body: { name?: string; waypoints: [number, number][]; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/corridor`, body));
   }
 
-  createObjectiveZone(body: { name?: string; waypoints: [number, number][] }) {
+  createObjectiveZone(body: { name?: string; waypoints: [number, number][]; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/objective`, body));
   }
 
-  executeZoneTactic(body: { zone_id: number; tactic: string }) {
+  executeZoneTactic(body: { zone_id: number; tactic: string; operator_id?: string }) {
     return firstValueFrom(this.http.post<{ status: string; zone_id: number; tactic: string }>(`${this.base}/zones/tactic`, body));
   }
 
-  deleteZone(zoneId: number) {
-    return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`));
+  deleteZone(zoneId: number, operatorId?: string) {
+    return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`, { params: operatorId ? { operator_id: operatorId } : {} }));
   }
 
   setRandomInterval(min_s: number, max_s: number, enabled?: boolean) {

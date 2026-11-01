@@ -7,6 +7,7 @@ from app.api.endpoints.copilot import router as copilot_router
 from app.api.endpoints.training import router as training_router
 from app.api.endpoints.radio import router as radio_router
 from app.api.endpoints.mavlink import router as mavlink_router
+from app.api.endpoints.auth import router as auth_router
 
 __all__ = [
     "drones_router",
@@ -18,4 +19,5 @@ __all__ = [
     "training_router",
     "radio_router",
     "mavlink_router",
+    "auth_router",
 ]

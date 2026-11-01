@@ -237,7 +237,7 @@ export class OfflineSimulator {
   private nextWeatherId = 200;
 
   /** Brings a weather cell into the theatre (only from the buttons; the scripted timeline has none). */
-  addPatrolZone(name: string, center: [number, number], radiusM: number): Zone {
+  addPatrolZone(name: string, center: [number, number], radiusM: number, operatorId = "operator_demo"): Zone {
     const zone: Zone = {
       id: 200 + this.zones.length,
       name: name || `Patrol Zone ${this.zones.length + 1}`,
@@ -249,11 +249,11 @@ export class OfflineSimulator {
       detected_by: 'OPERATOR',
     };
     this.zones = [...this.zones, zone];
-    this.log('PATROL_ZONE_CREATED', null, { zone_id: zone.id, name: zone.name, center, radius_m: radiusM }, 'OPERATOR_1');
+    this.log('PATROL_ZONE_CREATED', null, { zone_id: zone.id, name: zone.name, center, radius_m: radiusM }, operatorId);
     return zone;
   }
 
-  addThreatZone(name: string, waypoints?: [number, number][], center?: [number, number], radiusM?: number): Zone {
+  addThreatZone(name: string, waypoints?: [number, number][], center?: [number, number], radiusM?: number, operatorId = "commander_demo"): Zone {
     const count = this.zones.filter(z => z.zone_type === 'THREAT' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
     const label = greek[count] ?? `Sector-${count + 1}`;
@@ -283,11 +283,11 @@ export class OfflineSimulator {
       detected_by: 'OPERATOR',
     };
     this.zones = [...this.zones, zone];
-    this.log('THREAT_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints, center: zone.center, radius_m: zone.radius_m }, 'OPERATOR_1');
+    this.log('THREAT_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints, center: zone.center, radius_m: zone.radius_m }, operatorId);
     return zone;
   }
 
-  addSafeCorridor(name: string, waypoints: [number, number][]): Zone {
+  addSafeCorridor(name: string, waypoints: [number, number][], operatorId = "commander_demo"): Zone {
     const count = this.zones.filter(z => z.zone_type === 'SAFE_CORRIDOR' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'];
     const label = greek[count] ?? `Route-${count + 1}`;
@@ -301,11 +301,11 @@ export class OfflineSimulator {
       detected_by: 'OPERATOR',
     };
     this.zones = [...this.zones, zone];
-    this.log('SAFE_CORRIDOR_DECLARED', null, { corridor_id: zone.id, name: zone.name, waypoints: zone.waypoints }, 'OPERATOR_1');
+    this.log('SAFE_CORRIDOR_DECLARED', null, { corridor_id: zone.id, name: zone.name, waypoints: zone.waypoints }, operatorId);
     return zone;
   }
 
-  addObjectiveZone(name: string, waypoints: [number, number][]): Zone {
+  addObjectiveZone(name: string, waypoints: [number, number][], operatorId = "commander_demo"): Zone {
     const cleanPts: [number, number][] = orderPolygonVertices(waypoints);
     const count = this.zones.filter(z => z.zone_type === 'OBJECTIVE' && z.is_active).length;
     const greek = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel'];
@@ -320,11 +320,11 @@ export class OfflineSimulator {
       detected_by: 'OPERATOR',
     };
     this.zones = [...this.zones, zone];
-    this.log('OBJECTIVE_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints }, 'OPERATOR_1');
+    this.log('OBJECTIVE_ZONE_DECLARED', null, { zone_id: zone.id, name: zone.name, waypoints: zone.waypoints }, operatorId);
     return zone;
   }
 
-  deployDrone(): SimDrone {
+  deployDrone(operatorId = "operator_demo"): SimDrone {
     const nextId = Math.max(0, ...this.drones.map(d => d.id)) + 1;
     const baseLat = 44.316;
     const baseLon = 23.8;
@@ -370,12 +370,12 @@ export class OfflineSimulator {
         description: `Drone ${nextId} deployed in Base Forward zone (mode: LOITER)`,
         mission_time_s: this.elapsed,
       },
-      'OPERATOR_1',
+      operatorId,
     );
     return newDrone;
   }
 
-  executeZoneTactic(zoneId: number, tactic: string, operatorId = 'OPERATOR_1'): { ok: boolean; message: string } {
+  executeZoneTactic(zoneId: number, tactic: string, operatorId = 'operator_demo'): { ok: boolean; message: string } {
     const pz = this.zones.find(z => z.id === zoneId && z.zone_type === 'PATROL');
     if (!pz) return { ok: false, message: 'Patrol zone not found.' };
 
@@ -497,12 +497,12 @@ export class OfflineSimulator {
     }
   }
 
-  deleteZone(zoneId: number): boolean {
+  deleteZone(zoneId: number, operatorId = "operator_demo"): boolean {
     const z = this.zones.find(zone => zone.id === zoneId);
     if (!z) return false;
     z.is_active = false;
     this.zones = [...this.zones];
-    this.log('ZONE_DELETED', null, { zone_id: zoneId, name: z.name, zone_type: z.zone_type }, 'OPERATOR_1');
+    this.log('ZONE_DELETED', null, { zone_id: zoneId, name: z.name, zone_type: z.zone_type }, operatorId);
     return true;
   }
 

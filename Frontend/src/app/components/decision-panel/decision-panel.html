@@ -5,16 +5,18 @@
     </div>
 
     <div class="panel-tabs" role="tablist" aria-label="Decisions View Modes">
-      <button
-        type="button"
-        role="tab"
-        class="tab-btn"
-        [class.active]="activeTab() === 'commands'"
-        [attr.aria-selected]="activeTab() === 'commands'"
-        (click)="setTab('commands')"
-      >
-        <span class="tab-label">Commands</span>
-      </button>
+      @if (store.isOperator()) {
+        <button
+          type="button"
+          role="tab"
+          class="tab-btn"
+          [class.active]="activeTab() === 'commands'"
+          [attr.aria-selected]="activeTab() === 'commands'"
+          (click)="setTab('commands')"
+        >
+          <span class="tab-label">Commands</span>
+        </button>
+      }
 
       <button
         type="button"
@@ -34,7 +36,7 @@
 
   <div class="panel-body">
     <!-- TAB 1: COMMANDS (Direct Drone Control & Swarm Tactics) -->
-    @if (activeTab() === 'commands') {
+    @if (store.isOperator() && activeTab() === 'commands') {
       <div class="tab-content commands-tab">
         <div class="command-scope-toggle" role="group" aria-label="Command Scope">
           <button

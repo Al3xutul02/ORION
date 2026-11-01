@@ -73,6 +73,13 @@
     <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
       {{ store.muted() ? '&#128263;' : '&#128266;' }}
     </button>
+    <div class="user-pill" [title]="'Authenticated as ' + (store.currentUser()?.displayName ?? '')">
+      <span class="user-role-badge" [class.commander]="store.isCommander()" [class.operator]="store.isOperator()">{{ store.currentUser()?.role }}</span>
+      <span class="user-name">{{ store.currentUser()?.username }}</span>
+      <button class="btn-logout" type="button" (click)="store.logout()" title="Logout from ORION">
+        &#9034; Logout
+      </button>
+    </div>
   </div>
 </header>
 
@@ -108,7 +115,9 @@
       }
     </div>
     <div class="inject">
-      <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary (Gemini, or local rules offline) attacks for 3 minutes; you get a scored debrief">&#127919; AI training</button>
+      @if (store.isOperator()) {
+        <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary (Gemini, or local rules offline) attacks for 3 minutes; you get a scored debrief">&#127919; AI training</button>
+      }
       <span class="hint">Demo toys:</span>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>

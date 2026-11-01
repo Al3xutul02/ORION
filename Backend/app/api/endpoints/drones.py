@@ -1,4 +1,5 @@
-from typing import List
+from pydantic import BaseModel
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -133,8 +134,13 @@ def ingest_telemetry(payload: TelemetryCreate, db: Session = Depends(get_db)):
     return entry
 
 
+class DeployDroneRequest(BaseModel):
+    operator_id: Optional[str] = "operator_demo"
+
+
 @router.post("/deploy")
-def deploy_drone(db: Session = Depends(get_db)):
+def deploy_drone(payload: Optional[DeployDroneRequest] = None, db: Session = Depends(get_db)):
     """Deploys a new drone in the Base Forward zone."""
-    res = simulator.deploy_drone(db=db)
+    op_id = payload.operator_id if payload and payload.operator_id else "operator_demo"
+    res = simulator.deploy_drone(db=db, operator_id=op_id)
     return res
