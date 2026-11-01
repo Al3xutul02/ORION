@@ -58,6 +58,7 @@
   &.base { border-color: var(--zone-base); background: rgba(92, 200, 255, 0.2); }
   &.patrol { border-color: #00d4ff; background: transparent; }
   &.corridor { border-color: var(--zone-corridor); background: rgba(61, 220, 132, 0.25); }
+  &.objective { border-color: var(--zone-objective); background: rgba(245, 158, 11, 0.25); }
   &.interference { border-color: var(--zone-interference); background: rgba(255, 159, 67, 0.2); }
   &.threat { border-color: var(--zone-threat); background: rgba(255, 84, 99, 0.2); }
   &.weather { border-color: var(--violet); background: rgba(180, 140, 255, 0.2); }
@@ -196,7 +197,62 @@
     &.landed {
       opacity: 0.6;
     }
+
+    // Mentioned on the radio: a violet flash and the line in a bubble above the drone.
+    &.talking {
+      z-index: 20; // above the zone labels (10)
+
+      .glyph {
+        animation: radio-flash 0.7s ease-in-out 4;
+      }
+    }
+
+    .bubble {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 220px;
+      padding: 5px 8px;
+      border: 1px solid var(--violet);
+      border-radius: 6px;
+      background: rgba(20, 16, 34, 0.95);
+      color: var(--text);
+      font: 500 11.5px/1.35 var(--sans);
+      font-style: italic;
+      text-align: left;
+      white-space: normal;
+      pointer-events: none;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+
+      b {
+        display: block;
+        margin-bottom: 1px;
+        font: 600 9.5px/1.2 var(--mono);
+        font-style: normal;
+        color: var(--violet);
+      }
+
+      &::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border: 5px solid transparent;
+        border-top-color: var(--violet);
+      }
+    }
   }
+
+  @keyframes radio-flash {
+    50% {
+      box-shadow: 0 0 0 4px rgba(180, 140, 255, 0.9), 0 0 18px 6px rgba(180, 140, 255, 0.6);
+      border-color: #b48cff;
+    }
+  }
+
 
   .zone-label {
     display: flex;
@@ -219,22 +275,50 @@
 
     &.zone-BASE { color: var(--zone-base); }
     &.zone-SAFE_CORRIDOR { color: var(--zone-corridor); }
+    &.zone-OBJECTIVE {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 7px;
+      font-size: 9.5px;
+      letter-spacing: 0.03em;
+      border-radius: 4px;
+      background: rgba(15, 23, 42, 0.92);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(245, 158, 11, 0.55);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+      color: var(--zone-objective);
+      white-space: nowrap;
+
+      .objective-icon {
+        font-size: 9px;
+        color: #f59e0b;
+        line-height: 1;
+        display: inline-block;
+      }
+
+      .objective-name {
+        font-weight: 600;
+        color: #f59e0b;
+      }
+    }
     &.zone-INTERFERENCE { color: var(--zone-interference); }
     &.zone-THREAT { color: var(--zone-threat); }
     &.zone-WEATHER { color: var(--violet); }
 
     &.zone-PATROL {
-      display: inline-flex;
-      flex-direction: row;
-      align-items: center;
+      display: inline-flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
       gap: 6px;
       padding: 3px 10px;
       border-radius: 14px;
-      background: rgba(11, 18, 26, 0.96);
+      background: rgba(11, 18, 26, 0.96) !important;
       backdrop-filter: blur(8px);
-      border: 1px solid rgba(0, 229, 255, 0.8);
+      border: 1px solid rgba(0, 229, 255, 0.8) !important;
       box-shadow: 0 3px 12px rgba(0, 0, 0, 0.85);
-      color: #00e5ff;
+      color: #00e5ff !important;
       font-size: 10.5px;
       font-weight: 700;
       letter-spacing: 0.06em;
@@ -246,7 +330,11 @@
 
       .patrol-icon {
         font-size: 12px;
-        color: #00e5ff;
+        color: #00e5ff !important;
+      }
+
+      span {
+        color: #00e5ff !important;
       }
     }
 
@@ -286,6 +374,55 @@
       color: #0b0f14;
       font-weight: 600;
       box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);
+    }
+
+    &.corridor-btn {
+      border-color: rgba(61, 220, 132, 0.5);
+      color: var(--zone-corridor);
+
+      &:hover {
+        background: rgba(61, 220, 132, 0.15);
+        border-color: var(--zone-corridor);
+      }
+
+      &.active {
+        background: var(--zone-corridor);
+        color: #0b0f14;
+        box-shadow: 0 0 10px rgba(61, 220, 132, 0.4);
+      }
+    }
+
+    &.objective-btn {
+      border-color: rgba(245, 158, 11, 0.5);
+      color: var(--zone-objective);
+
+      &:hover {
+        background: rgba(245, 158, 11, 0.15);
+        border-color: var(--zone-objective);
+      }
+
+      &.active {
+        background: var(--zone-objective);
+        color: #0b0f14;
+        font-weight: 600;
+        box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+      }
+    }
+
+    &.threat-btn {
+      border-color: rgba(255, 84, 99, 0.5);
+      color: var(--zone-threat);
+
+      &:hover {
+        background: rgba(255, 84, 99, 0.15);
+        border-color: var(--zone-threat);
+      }
+
+      &.active {
+        background: var(--zone-threat);
+        color: #0b0f14;
+        box-shadow: 0 0 10px rgba(255, 84, 99, 0.4);
+      }
     }
 
     &.danger {
@@ -329,6 +466,18 @@
     color: #00d4ff;
     font-size: 14px;
     font-weight: bold;
+
+    &.danger {
+      color: var(--red);
+    }
+
+    &.ok {
+      color: var(--green);
+    }
+
+    &.objective {
+      color: var(--zone-objective);
+    }
   }
 
   .mode-text {
@@ -354,6 +503,17 @@
     &:disabled {
       opacity: 0.45;
       cursor: not-allowed;
+    }
+
+    &.btn-finish-threat {
+      border-color: var(--zone-threat);
+      background: rgba(255, 84, 99, 0.25);
+      color: #fff;
+
+      &:hover:not(:disabled) {
+        background: var(--zone-threat);
+        color: #0b0f14;
+      }
     }
   }
 

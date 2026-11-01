@@ -1,8 +1,9 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import { ORION_CONFIG } from './config';
-import { AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
+import { AppUser, AuditEvent, Zone, ChainVerification, CopilotAnswer, DecisionResult, ExportReport, Recommendation } from './models';
+import { AdversaryMoveKind } from './training';
 
 export type SimulationAction =
   | 'start'
@@ -24,6 +25,12 @@ export class OrionApi {
   private http = inject(HttpClient);
   private base = ORION_CONFIG.apiV1;
 
+  login(username: string, password: string) {
+    return firstValueFrom(
+      this.http.post<AppUser>(`${this.base}/auth/login`, { username, password }),
+    );
+  }
+
   health() {
     return firstValueFrom(this.http.get<{ status: string; simulator_running: boolean; simulation_time_s: number }>(`${ORION_CONFIG.apiBase}/health`));
   }
@@ -44,11 +51,11 @@ export class OrionApi {
     return firstValueFrom(this.http.get<Recommendation[]>(`${this.base}/actions/recommendations`, { params: { status } }));
   }
 
-  decide(recommendationId: number, decision: 'APPROVE' | 'REJECT', notes?: string) {
+  decide(recommendationId: number, decision: 'APPROVE' | 'REJECT', notes?: string, operatorId: string = ORION_CONFIG.operatorId) {
     return firstValueFrom(
       this.http.post<DecisionResult>(`${this.base}/actions/decide`, {
         recommendation_id: recommendationId,
-        operator_id: ORION_CONFIG.operatorId,
+        operator_id: operatorId,
         decision,
         notes,
       }),
@@ -62,12 +69,13 @@ export class OrionApi {
     targetZoneId?: number,
     targetPoint?: [number, number],
     pathType: 'SAFE' | 'RISKY' = 'SAFE',
+    operatorId: string = ORION_CONFIG.operatorId,
   ) {
     return firstValueFrom(
       this.http.post<DecisionResult>(`${this.base}/actions/command`, {
         drone_id: droneId,
         action,
-        operator_id: ORION_CONFIG.operatorId,
+        operator_id: operatorId,
         notes,
         target_zone_id: targetZoneId,
         target_point: targetPoint,
@@ -76,31 +84,52 @@ export class OrionApi {
     );
   }
 
-  createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number }) {
+  deployDrone(operatorId: string = ORION_CONFIG.operatorId) {
+    return firstValueFrom(this.http.post<{ status: string; drone_id: number; location: number[]; mode: string }>(`${this.base}/drones/deploy`, { operator_id: operatorId }));
+  }
+
+  createPatrolZone(body: { name?: string; center: [number, number]; radius_m: number; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/patrol`, body));
   }
 
-  createThreatZone(body: { name?: string; center: [number, number]; radius_m: number }) {
+  movePatrolZone(body: { zone_id: number; center: [number, number]; operator_id?: string; path_type?: string }) {
+    return firstValueFrom(this.http.post<{ status: string; zone: Zone; drones_count: number; message: string }>(`${this.base}/zones/patrol/move`, body));
+  }
+
+  createThreatZone(body: { name?: string; waypoints?: [number, number][]; center?: [number, number]; radius_m?: number; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/threat`, body));
   }
 
-  createSafeCorridor(body: { name?: string; waypoints: [number, number][] }) {
+  createSafeCorridor(body: { name?: string; waypoints: [number, number][]; operator_id?: string }) {
     return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/corridor`, body));
   }
 
-  executeZoneTactic(body: { zone_id: number; tactic: string }) {
+  createObjectiveZone(body: { name?: string; waypoints: [number, number][]; operator_id?: string }) {
+    return firstValueFrom(this.http.post<Zone>(`${this.base}/zones/objective`, body));
+  }
+
+  executeZoneTactic(body: { zone_id: number; tactic: string; operator_id?: string }) {
     return firstValueFrom(this.http.post<{ status: string; zone_id: number; tactic: string }>(`${this.base}/zones/tactic`, body));
   }
 
-  deleteZone(zoneId: number) {
-    return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`));
+  deleteZone(zoneId: number, operatorId?: string) {
+    return firstValueFrom(this.http.delete<{ status: string; id: number }>(`${this.base}/zones/${zoneId}`, { params: operatorId ? { operator_id: operatorId } : {} }));
   }
 
-  setRandomInterval(min_s: number, max_s: number) {
+  setRandomInterval(min_s: number, max_s: number, enabled?: boolean) {
     return firstValueFrom(
-      this.http.post<{ status: string; random_interval_min: number; random_interval_max: number }>(
+      this.http.post<{ status: string; random_interval_min: number; random_interval_max: number; random_events_enabled?: boolean }>(
         `${this.base}/simulation/config-random-interval`,
-        { min_s, max_s },
+        { min_s, max_s, enabled },
+      ),
+    );
+  }
+
+  toggleRandomEvents(enabled?: boolean) {
+    return firstValueFrom(
+      this.http.post<{ status: string; random_events_enabled: boolean }>(
+        `${this.base}/simulation/toggle-random-events`,
+        enabled !== undefined ? { enabled } : {},
       ),
     );
   }
@@ -122,6 +151,34 @@ export class OrionApi {
     elapsed_s?: number;
   }) {
     return firstValueFrom(this.http.post<CopilotAnswer>(`${this.base}/copilot/ask`, body));
+  }
+
+  /** Gemini as the training adversary. Short timeout: the browser plays locally rather than wait. */
+  trainingMove(state: Record<string, unknown>) {
+    return firstValueFrom(
+      this.http.post<{ move: AdversaryMoveKind; target_drone: number | null; wait_s: number; reason: string; model: string }>(
+        `${this.base}/training/adversary-move`, state,
+      ).pipe(timeout(12000)),
+    );
+  }
+
+  trainingDebrief(results: Record<string, unknown>) {
+    return firstValueFrom(
+      this.http.post<{ summary: string; strengths: string[]; improvements: string[]; model: string }>(
+        `${this.base}/training/debrief`, results,
+      ).pipe(timeout(30000)),
+    );
+  }
+
+  /** One push-to-talk transmission: transcribed by Gemini; logged server-side when `log` (Live). */
+  radioTransmit(body: {
+    audio_base64: string; mime_type: string; duration_s: number; operator_id: string; started_at: string; log: boolean;
+  }) {
+    return firstValueFrom(
+      this.http.post<{ transcript: string; language: string; drones: number[]; kind: string; model: string; logged: boolean; event_id: number | null }>(
+        `${this.base}/radio/transmissions`, body,
+      ).pipe(timeout(30000)),
+    );
   }
 
   simulationStatus() {

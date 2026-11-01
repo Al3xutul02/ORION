@@ -98,22 +98,44 @@ def trigger_weather_clear_scenario(db: Session = Depends(get_db)):
     return {**res, "status": "weather_cleared"}
 
 
+@router.post("/deploy-drone")
+def deploy_drone_scenario(db: Session = Depends(get_db)):
+    """Deploys a new drone in the Base Forward zone."""
+    res = simulator.deploy_drone(db=db)
+    return res
+
+
+from typing import Optional
 from pydantic import BaseModel, Field
 
 class RandomIntervalConfig(BaseModel):
     min_s: float = Field(..., ge=1.0, description="Minimum interval in seconds between random events")
     max_s: float = Field(..., ge=1.0, description="Maximum interval in seconds between random events")
+    enabled: Optional[bool] = Field(None, description="Whether automatic random events are enabled")
+
+class RandomEventsToggle(BaseModel):
+    enabled: Optional[bool] = Field(None, description="Target state for automatic random events; if omitted, toggles state")
 
 @router.post("/config-random-interval")
 def config_random_interval(config: RandomIntervalConfig):
     if config.max_s < config.min_s:
         raise HTTPException(status_code=400, detail="max_s must be greater than or equal to min_s")
-    simulator.set_random_interval(config.min_s, config.max_s)
+    simulator.set_random_interval(config.min_s, config.max_s, config.enabled)
     return {
         "status": "configured",
         "random_interval_min": simulator.random_interval_min,
         "random_interval_max": simulator.random_interval_max,
+        "random_events_enabled": simulator.random_events_enabled,
         "next_random_event_at": simulator.next_random_event_at,
+    }
+
+@router.post("/toggle-random-events")
+def toggle_random_events(body: Optional[RandomEventsToggle] = None):
+    new_state = body.enabled if (body and body.enabled is not None) else not simulator.random_events_enabled
+    simulator.set_random_events_enabled(new_state)
+    return {
+        "status": "success",
+        "random_events_enabled": simulator.random_events_enabled,
     }
 
 @router.get("/status")
@@ -125,4 +147,5 @@ def get_simulation_status():
         "sector_interference_active": simulator.sector_interference_active,
         "random_interval_min": simulator.random_interval_min,
         "random_interval_max": simulator.random_interval_max,
+        "random_events_enabled": simulator.random_events_enabled,
     }

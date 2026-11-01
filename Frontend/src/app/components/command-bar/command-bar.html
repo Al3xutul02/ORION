@@ -19,7 +19,7 @@
     <button type="button" [class.on]="store.mode() === 'offline'" (click)="store.setMode('offline')">Demo</button>
   </div>
 
-  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'Deterministic 3-minute demo scenario'">
+  <span class="link" [class]="'link link-' + (store.mode() === 'offline' ? 'local' : store.link())" [title]="store.mode() === 'live' ? apiBase : 'AI training, in the browser'">
     <span class="dot"></span>
     @switch (store.mode() === 'offline' ? 'local' : store.link()) {
       @case ('online') { Backend online }
@@ -33,14 +33,14 @@
 
   <div class="clock mono" aria-label="Mission time">
     <span class="t">T+{{ clock() }}</span>
-    <span class="step">{{ store.mode() === 'offline' ? currentStep().label : 'Dynamic battlefield' }}</span>
+    <span class="step">{{ store.mode() === 'offline' ? (store.training() ? 'AI training' : 'Ready: press Start') : 'Dynamic battlefield' }}</span>
   </div>
 
   <div class="controls no-print">
     @if (store.running()) {
       <button class="btn" type="button" (click)="store.pause()" [disabled]="store.busy()">Pause</button>
     } @else {
-      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">Start</button>
+      <button class="btn primary" type="button" (click)="store.start()" [disabled]="store.busy()">{{ store.mode() === 'offline' && store.training()?.phase !== 'running' ? 'Start AI training' : 'Start' }}</button>
     }
     <button class="btn" type="button" (click)="store.reset()" [disabled]="store.busy()">Reset</button>
     @if (store.mode() === 'offline') {
@@ -50,25 +50,91 @@
         }
       </div>
     }
+    <button
+      class="btn ptt"
+      type="button"
+      [class.rec]="store.radio() === 'recording'"
+      [class.busy]="store.radio() === 'transcribing'"
+      (pointerdown)="$event.preventDefault(); store.pttDown()"
+      (pointerup)="store.pttUp()"
+      (pointerleave)="store.pttUp()"
+      (pointercancel)="store.pttUp()"
+      (contextmenu)="$event.preventDefault()"
+      title="Push-to-talk: hold (or hold Space) and speak. The transcript goes into the after-action log."
+      [attr.aria-label]="'Push to talk'"
+      [attr.aria-pressed]="store.radio() === 'recording'"
+    >
+      @switch (store.radio()) {
+        @case ('recording') { <span class="dot"></span> REC 0:{{ store.radioSeconds().toString().padStart(2, '0') }} }
+        @case ('transcribing') { Transcribing… }
+        @default { &#127897; PTT }
+      }
+    </button>
     <button class="btn ghost icon" type="button" (click)="store.toggleMute()" [attr.aria-label]="store.muted() ? 'Unmute alerts' : 'Mute alerts'" [title]="store.muted() ? 'Alerts muted' : 'Alert sound on'">
       {{ store.muted() ? '&#128263;' : '&#128266;' }}
     </button>
+    <div class="user-pill" [title]="'Authenticated as ' + (store.currentUser()?.displayName ?? '')">
+      <span class="user-role-badge" [class.commander]="store.isCommander()" [class.operator]="store.isOperator()">{{ store.currentUser()?.role }}</span>
+      <span class="user-name">{{ store.currentUser()?.username }}</span>
+      <button class="btn-logout" type="button" (click)="store.logout()" title="Logout from ORION">
+        &#9034; Logout
+      </button>
+    </div>
   </div>
 </header>
 
 <div class="timeline no-print">
-  @if (store.mode() === 'offline') {
-    <div class="track">
-      <div class="fill" [style.width.%]="progress()"></div>
-      @for (s of scenario(); track s.at) {
-        <span class="mark" [class.done]="store.elapsed() >= s.at" [style.left.%]="stepPos(s.at)" [title]="s.detail">
-          <span class="pin"></span>
-          <span class="lbl">{{ s.label }}</span>
-        </span>
+  @if (store.mode() === 'offline' && store.training(); as t) {
+    <div class="live-banner training">
+      <span class="pulse-dot" [class.active]="t.phase === 'running'"></span>
+      <span class="live-title">AI training</span>
+      <span class="live-sub">
+        @switch (t.phase) {
+          @case ('running') {
+            {{ trainingRemaining() }} left &middot; adversary: {{ t.adversary === 'RL' ? 'RL policy' : t.adversary === 'AI' ? 'Gemini' : 'local rules' }}
+            &middot; {{ t.moves.length }} {{ t.moves.length === 1 ? 'attack' : 'attacks' }} so far
+            &middot; {{ store.pendingRecommendations().length }} pending {{ store.pendingRecommendations().length === 1 ? 'decision' : 'decisions' }}
+            @if (t.requesting) { &middot; <em>the adversary is choosing...</em> }
+          }
+          @case ('debriefing') { Session over. Building the debrief... }
+          @default { Session over. }
+        }
+      </span>
+      @if (t.phase === 'running') {
+        <button class="btn sm" type="button" (click)="store.finishTraining()">End &amp; debrief</button>
       }
     </div>
+    <!-- The session so far: each attack the adversary staged, where it happened. -->
+    <div class="track">
+      <div class="fill" [style.width.%]="progress()"></div>
+      @for (m of t.moves; track $index) {
+        @if (m.move !== 'WAIT') {
+          <span class="mark done" [style.left.%]="movePos(m.at_s ?? 0)" [title]="m.reason">
+            <span class="pin"></span>
+            <span class="lbl">{{ moveLabels[m.move] }}{{ m.target_drone ? ' D' + m.target_drone : '' }}</span>
+          </span>
+        }
+      }
+    </div>
+  } @else if (store.mode() === 'offline') {
+    <div class="live-banner training">
+      <span class="pulse-dot"></span>
+      <span class="live-title">AI training</span>
+      <span class="live-sub">Press <b>Start AI training</b>: for 3 minutes an adversary attacks, mostly GPS spoofing and jamming. You decide; at the end you get a score and a debrief.</span>
+    </div>
+  }
+  <!-- Manual attacks work before and during a session, on top of what the adversary does. -->
+  @if (store.mode() === 'offline') {
     <div class="inject">
-      <span class="hint">Demo toys:</span>
+      <span class="hint">Adversary:</span>
+      <div class="adv" role="group" aria-label="Training adversary" [title]="store.training()?.phase === 'running' ? 'Applies to the next session' : ''">
+        <button type="button" [class.on]="store.adversaryChoice() === 'RL'" [disabled]="store.training()?.phase === 'running'" (click)="store.setAdversaryChoice('RL')" title="Q-learning policy trained on thousands of simulated sessions; works offline">RL</button>
+        <button type="button" [class.on]="store.adversaryChoice() === 'GEMINI'" [disabled]="store.training()?.phase === 'running'" (click)="store.setAdversaryChoice('GEMINI')" title="Gemini picks each attack (needs the backend and internet)">Gemini</button>
+      </div>
+      @if (store.isOperator()) {
+        <button class="btn sm primary" type="button" (click)="store.startTraining()" title="An adversary (Gemini, or local rules offline) attacks for 3 minutes; you get a scored debrief">&#127919; AI training</button>
+      }
+      <span class="hint">Manual attacks:</span>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()">GPS spoof D2</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()">Replay cmd</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()">Mobile jammer</button>
@@ -78,7 +144,7 @@
       <button class="btn sm" type="button" (click)="store.trigger('weather-rain')" [disabled]="store.busy()" title="Heavy rain band: link fade, within limits">Rain</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-wind')" [disabled]="store.busy()" title="Strong wind corridor: above the drones' limit">Wind</button>
       <button class="btn sm" type="button" (click)="store.trigger('weather-clear')" [disabled]="store.busy()" title="Dissipate the oldest weather cell">- Weather</button>
-      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+      <div class="interval-field" [class.disabled]="!store.randomEventsEnabled()" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
         <span class="interval-label">Event interval:</span>
         <input
           type="number"
@@ -88,6 +154,7 @@
           step="0.5"
           [value]="store.randomIntervalMin()"
           (change)="onIntervalMinChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Minimum seconds between random events"
           aria-label="Minimum seconds"
         />
@@ -100,22 +167,41 @@
           step="0.5"
           [value]="store.randomIntervalMax()"
           (change)="onIntervalMaxChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Maximum seconds between random events"
           aria-label="Maximum seconds"
         />
         <span class="interval-unit">s</span>
       </div>
+      <button
+        class="btn sm toggle-btn"
+        [class.on]="store.randomEventsEnabled()"
+        type="button"
+        (click)="store.toggleRandomEvents()"
+        [attr.aria-pressed]="store.randomEventsEnabled()"
+        [title]="store.randomEventsEnabled() ? 'Disable automatic random battlefield events' : 'Enable automatic random battlefield events'"
+      >
+        <span class="toggle-indicator"></span>
+        {{ store.randomEventsEnabled() ? 'Random events: ON' : 'Random events: OFF' }}
+      </button>
     </div>
   } @else {
     <div class="live-banner">
       <span class="pulse-dot" [class.active]="store.running()"></span>
       <span class="live-title">Live EW Simulation</span>
-      <span class="live-sub">{{ liveTheatreSummary() }} &middot; Random battlefield events occur automatically while running</span>
+      <span class="live-sub">
+        {{ liveTheatreSummary() }} &middot;
+        @if (store.randomEventsEnabled()) {
+          Random battlefield events occur automatically while running
+        } @else {
+          Automatic random battlefield events are paused
+        }
+      </span>
     </div>
     <div class="inject">
       <span class="hint">Battlefield events:</span>
       <button class="btn sm" type="button" (click)="store.trigger('random')" [disabled]="store.busy()" title="Trigger a random battlefield event now">&#127922; Random event</button>
-      <div class="interval-field" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
+      <div class="interval-field" [class.disabled]="!store.randomEventsEnabled()" title="Random event frequency interval in seconds (e.g. 4 to 8 seconds)">
         <span class="interval-label">Interval:</span>
         <input
           type="number"
@@ -125,6 +211,7 @@
           step="0.5"
           [value]="store.randomIntervalMin()"
           (change)="onIntervalMinChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Minimum seconds between random events"
           aria-label="Minimum seconds"
         />
@@ -137,11 +224,23 @@
           step="0.5"
           [value]="store.randomIntervalMax()"
           (change)="onIntervalMaxChange($event)"
+          [disabled]="!store.randomEventsEnabled()"
           title="Maximum seconds between random events"
           aria-label="Maximum seconds"
         />
         <span class="interval-unit">s</span>
       </div>
+      <button
+        class="btn sm toggle-btn"
+        [class.on]="store.randomEventsEnabled()"
+        type="button"
+        (click)="store.toggleRandomEvents()"
+        [attr.aria-pressed]="store.randomEventsEnabled()"
+        [title]="store.randomEventsEnabled() ? 'Disable automatic random battlefield events' : 'Enable automatic random battlefield events'"
+      >
+        <span class="toggle-indicator"></span>
+        {{ store.randomEventsEnabled() ? 'Random events: ON' : 'Random events: OFF' }}
+      </button>
       <button class="btn sm" type="button" (click)="store.trigger('spoofing')" [disabled]="store.busy()" title="Spoof a random patrolling drone">Spoof drone</button>
       <button class="btn sm" type="button" (click)="store.trigger('interference')" [disabled]="store.busy()" title="Deploy a mobile EW jammer at a random position">Jammer</button>
       <button class="btn sm" type="button" (click)="store.trigger('replay')" [disabled]="store.busy()" title="Simulate an adversary command replay attack">Replay cmd</button>

@@ -17,7 +17,7 @@ export class DecisionPanel {
   protected store = inject(OrionStore);
 
   /** Active sub-tab: 'commands' (default) or 'suggestions'. */
-  protected activeTab = signal<DecisionTab>('commands');
+  protected activeTab = signal<DecisionTab>(this.store.isOperator() ? 'commands' : 'suggestions');
 
   /** Action awaiting the operator's second click in the Commands tab. */
   protected confirming = signal<ActionOption['id'] | null>(null);
@@ -31,7 +31,7 @@ export class DecisionPanel {
 
   protected history = computed(() => this.store.recommendations().filter(r => r.status !== 'PENDING'));
 
-  protected pathType = signal<'SAFE' | 'RISKY'>('SAFE');
+  protected pathType = this.store.pathType;
   protected patrolZones = computed(() => this.store.zones().filter(z => z.is_active && z.zone_type === 'PATROL'));
   protected selectedPatrolZoneId = signal<number | null>(null);
   protected pickedLoiterPoint = computed(() => this.store.pickedLoiterPoint());
@@ -57,6 +57,13 @@ export class DecisionPanel {
     this.executingTactic.set(null);
   }
 
+  protected startMoveZone(zoneId: number): void {
+    this.store.setMovingZoneId(zoneId);
+    this.store.setMapMode('move_patrol');
+    const pz = this.store.zones().find(z => z.id === zoneId);
+    this.store.pushToast('info', 'Move Patrol Zone', `Click anywhere on the map to set the new center for ${pz?.name ?? 'the patrol zone'}.`);
+  }
+
   protected zoneDrones(zoneId: number): DroneState[] {
     return this.store.drones().filter(d => (d.patrol_zone_id ?? 10) === zoneId || (zoneId === 100 && (d.patrol_zone_id === 100 || d.patrol_zone_id === 10)));
   }
@@ -79,7 +86,7 @@ export class DecisionPanel {
   }
 
   protected setPathType(type: 'SAFE' | 'RISKY'): void {
-    this.pathType.set(type);
+    this.store.setPathType(type);
   }
 
   protected setPatrolZone(id: number): void {
@@ -87,7 +94,9 @@ export class DecisionPanel {
   }
 
   protected joinPatrol(droneId: number): void {
-    const zid = this.selectedPatrolZoneId() ?? this.patrolZones()[0]?.id;
+    const pzs = this.patrolZones();
+    const selected = this.selectedPatrolZoneId();
+    const zid = selected !== null && pzs.some(z => z.id === selected) ? selected : pzs[0]?.id;
     this.store.commandDrone(droneId, 'JOIN_PATROL', zid, undefined, this.pathType());
   }
 
@@ -103,17 +112,24 @@ export class DecisionPanel {
   }
 
   constructor() {
-    // Switching drones cancels a half-finished confirmation and displays the commands tab.
+    // Switching drones cancels a half-finished confirmation and displays the commands tab if operator.
     effect(() => {
       const id = this.store.selectedDroneId();
       this.confirming.set(null);
-      if (id !== null) {
+      if (id !== null && this.store.isOperator()) {
         this.activeTab.set('commands');
+      }
+    });
+
+    effect(() => {
+      if (!this.store.isOperator() && this.activeTab() === 'commands') {
+        this.activeTab.set('suggestions');
       }
     });
   }
 
   protected setTab(tab: DecisionTab): void {
+    if (tab === 'commands' && !this.store.isOperator()) return;
     this.activeTab.set(tab);
   }
 
@@ -166,8 +182,8 @@ export class DecisionPanel {
 
   protected recReason(rec: Recommendation): string {
     if (rec.reason) return rec.reason;
-    if (rec.trigger_event === 'PATROL_ZONE_JAMMED' || rec.recommended_action === 'SECTOR_ORBIT_SHIFT') {
-      return 'Active electronic warfare jamming intersects the patrol zone, compromising drone GPS and C2 navigation. Action needed: Shift swarm orbit to unjammed sector to restore clean communications while maintaining continuous surveillance.';
+    if (rec.trigger_event === 'PATROL_ZONE_JAMMED') {
+      return 'Active electronic warfare jamming intersects the patrol zone. Action needed: Move patrol zone or command LOITER to reposition swarm outside jammer range.';
     }
     if (rec.trigger_event === 'SENSORS_RECALIBRATED_SAFE' || rec.recommended_action === 'CONTINUE_PATROL') {
       return 'Sensor recalibration complete and verified in clean airspace. Action needed: Drone is holding idle in loiter; operator command is required to resume regular sector patrol.';

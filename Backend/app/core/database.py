@@ -101,3 +101,36 @@ def get_db() -> Generator:
         yield db
     finally:
         db.close()
+
+
+def seed_default_users(db):
+    """Seeds the initial registered accounts into the database if not present."""
+    from app.models.user import User
+    from app.core.security import hash_password
+
+    op = db.query(User).filter(User.username == "operator_demo").first()
+    if not op:
+        h, s = hash_password("123")
+        op = User(
+            username="operator_demo",
+            password_hash=h,
+            salt=s,
+            role="OPERATOR",
+            display_name="Operator Demo",
+            is_active=True
+        )
+        db.add(op)
+
+    cmd = db.query(User).filter(User.username == "commander_demo").first()
+    if not cmd:
+        h, s = hash_password("123")
+        cmd = User(
+            username="commander_demo",
+            password_hash=h,
+            salt=s,
+            role="COMMANDER",
+            display_name="Commander Demo",
+            is_active=True
+        )
+        db.add(cmd)
+    db.commit()

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class TacticalZoneBase(BaseModel):
     name: str
-    zone_type: str = Field(..., description="BASE, SAFE_CORRIDOR, INTERFERENCE, THREAT, PATROL")
+    zone_type: str = Field(..., description="BASE, SAFE_CORRIDOR, INTERFERENCE, THREAT, PATROL, OBJECTIVE")
     geometry_type: str = Field("POLYGON", description="POLYGON or CIRCLE")
     coordinates_json: str
     is_active: bool = True
@@ -31,19 +31,38 @@ class CreatePatrolZoneRequest(BaseModel):
     name: Optional[str] = None
     center: List[float] = Field(..., description="[lat, lon]")
     radius_m: float = Field(..., gt=0)
+    operator_id: Optional[str] = "operator_demo"
+
+
+class MovePatrolZoneRequest(BaseModel):
+    zone_id: int
+    center: List[float] = Field(..., min_length=2, max_length=2, description="[lat, lon]")
+    operator_id: Optional[str] = "operator_demo"
+    path_type: Optional[str] = "SAFE"
 
 
 class CreateThreatZoneRequest(BaseModel):
     name: Optional[str] = None
-    center: List[float] = Field(..., description="[lat, lon]")
-    radius_m: float = Field(..., gt=0)
+    center: Optional[List[float]] = Field(None, description="[lat, lon]")
+    radius_m: Optional[float] = Field(None, gt=0)
+    waypoints: Optional[List[List[float]]] = Field(None, min_length=3, description="List of [lat, lon] polygon vertices")
+    operator_id: Optional[str] = "commander_demo"
 
 
 class CreateSafeCorridorRequest(BaseModel):
     name: Optional[str] = None
     waypoints: List[List[float]] = Field(..., min_length=2, description="List of [lat, lon]")
+    operator_id: Optional[str] = "commander_demo"
+
+
+class CreateObjectiveZoneRequest(BaseModel):
+    name: Optional[str] = None
+    waypoints: List[List[float]] = Field(..., min_length=2, description="List of [lat, lon] coordinates (line or polygon)")
+    operator_id: Optional[str] = "commander_demo"
 
 
 class ExecuteZoneTacticRequest(BaseModel):
     zone_id: int
-    tactic: str = Field(..., description="SECTOR_ORBIT_SHIFT, TIGHT_MESH, WIDE_RECON, EGRESS_CORRIDOR, RESYNC_EQUIDISTANT")
+    tactic: str = Field(..., description="TIGHT_MESH, WIDE_RECON, EGRESS_CORRIDOR, RESYNC_EQUIDISTANT")
+    operator_id: Optional[str] = "operator_demo"
+    path_type: Optional[str] = "SAFE"

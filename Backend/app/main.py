@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.core.database import Base, engine, SessionLocal
+from app.core.database import Base, engine, SessionLocal, seed_default_users
 from app.api.api_v1 import api_router
 from app.api.websocket.telemetry_ws import router as ws_router
 from app.services.simulator import simulator
@@ -26,6 +26,9 @@ async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("Database schema initialized successfully.")
+        with SessionLocal() as db:
+            seed_default_users(db)
+        logger.info("Default user accounts seeded in database.")
 
         # Seed initial genesis log if audit log is completely empty
         with SessionLocal() as db:

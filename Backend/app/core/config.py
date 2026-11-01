@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:4200",
         "http://127.0.0.1:4200",
+        "http://localhost:4201",  # dev preview (.claude/launch.json)
+        "http://127.0.0.1:4201",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "http://localhost:3000",
@@ -61,6 +63,7 @@ class Settings(BaseSettings):
 
     # MAVLink 2 Security & Signing
     MAVLINK_SIGNING_KEY: str = "craiova_hackathon_orion_secret_key_2026"
+    SECRET_KEY: str = "orion_jwt_secret_signing_key_craiova_2026"
     MAVLINK_SYSTEM_ID: int = 255
     MAVLINK_COMPONENT_ID: int = 1
 
@@ -79,11 +82,17 @@ class Settings(BaseSettings):
     MAVLINK_IN_HOST: str = "0.0.0.0"
     MAVLINK_IN_PORT: int = 14560
 
-    # Read-only AAR copilot (Claude API). Without a key here, the SDK falls back to the
-    # ANTHROPIC_API_KEY environment variable or an `ant auth login` profile.
-    ANTHROPIC_API_KEY: Optional[str] = None
-    COPILOT_MODEL: str = "claude-opus-5-5"
-    COPILOT_EFFORT: str = "low"  # low | medium | high; low keeps chat answers quick
+    # Read-only AAR copilot (Gemini API). Without a key here, the SDK falls back to the
+    # GEMINI_API_KEY or GOOGLE_API_KEY environment variable.
+    GEMINI_API_KEY: Optional[str] = None
+    COPILOT_MODEL: str = "gemini-3.8-flash"
+    # Used when the main model is overloaded or times out (Gemini 503 / 504).
+    COPILOT_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
+    # AI training adversary (services/training_service.py): picks a move every ~20 s, so speed wins.
+    TRAINING_ADVERSARY_MODEL: str = "gemini-3.5-flash-lite"
+    # Radio log (services/radio_service.py): push-to-talk transcription, should take seconds.
+    RADIO_TRANSCRIBE_MODEL: str = "gemini-3.5-flash-lite"
+    COPILOT_EFFORT: str = "low"  # thinking level: low | medium | high; low keeps chat answers quick
 
 
 settings = Settings()

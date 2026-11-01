@@ -103,10 +103,25 @@ Toate cele 14 teste verifică:
 
 `POST /api/v1/copilot/ask` răspunde la întrebări despre misiune **doar din jurnalul cu lanț de hash** și citează înregistrările (`[#12]`). Nu are unelte, nu trimite comenzi și nu scrie nimic. Citările inexistente în jurnal sunt eliminate de server.
 
-- Necesită **Python 3.10+** (SDK-ul `anthropic`) și acces la internet.
-- Cheia: `ANTHROPIC_API_KEY` în `.env` sau în mediu. Fără cheie, endpoint-ul răspunde `503` cu un mesaj clar; restul aplicației funcționează normal.
-- Model: `COPILOT_MODEL` (implicit `claude-opus-5-5`), efort: `COPILOT_EFFORT` (implicit `low`, pentru răspunsuri rapide). Fallback-ul server-side (`fallbacks: "default"`) este activat.
+- Folosește **Gemini API** (SDK-ul `google-genai`) și necesită acces la internet.
+- Cheia: `GEMINI_API_KEY` în `.env` sau în mediu (se creează gratuit din [Google AI Studio](https://aistudio.google.com/apikey)). Fără cheie, endpoint-ul răspunde `503` cu un mesaj clar; restul aplicației funcționează normal.
+- Model: `COPILOT_MODEL` (implicit `gemini-3.8-flash`); dacă e supraîncărcat (503/504), răspunde `COPILOT_FALLBACK_MODEL` (implicit `gemini-3.5-flash-lite`), nivel de gândire: `COPILOT_EFFORT` (`low` / `medium` / `high`, implicit `low`, pentru răspunsuri rapide).
 - În modul Offline, frontend-ul trimite propriul jurnal din browser (`events`) și rezultatul verificării lanțului (`chain_valid`).
+
+### 🎙 Jurnal radio transcris automat
+
+- `POST /api/v1/radio/transmissions` (audio base64, max ~60 s): Gemini (`RADIO_TRANSCRIBE_MODEL`, implicit `gemini-3.5-flash-lite`) transcrie cuvânt cu cuvânt; în Live transmisia intră în jurnalul AAR cu lanț de hash ca `RADIO_TRANSMISSION` (text, vorbitor, ora apăsării pe stație). Audio-ul nu e salvat. În Demo (`log: false`) doar transcrie, iar browserul scrie în propriul jurnal.
+- Gemini etichetează și dronele pomenite (`drones`) și tipul transmisiei (`kind`: REPORT, ORDER, QUESTION, ACK, OTHER); o singură dronă pomenită devine și `drone_id`-ul înregistrării.
+- Copilotul citează transcrierile alături de evenimentele sistemului din același minut („ce s-a discutat când a apărut bruiajul?”, „ce s-a spus despre D3?”).
+- Scrierile în jurnal sunt serializate (`aar_service._append_lock`): înainte, o aprobare și simulatorul care scriau în aceeași clipă puteau lega două înregistrări de același hash anterior și rupeau lanțul.
+
+### 🎯 Antrenament cu AI ca adversar (modul Demo)
+
+Butonul **AI training** din Demo pornește o sesiune de 3 minute fără scriptul fix: un adversar alege atacurile simulate.
+- `POST /api/v1/training/adversary-move`: Gemini (`TRAINING_ADVERSARY_MODEL`, implicit `gemini-3.5-flash-lite`, rapid) primește starea exercițiului (drone, decizii în așteptare, timpii de reacție ai operatorului) și alege următorul eveniment dintr-un meniu fix: spoofing, bruiaj mobil, pierdere de legătură, comandă reluată, vreme. Răspunsul e validat față de ce poate simula browserul acum; maximum 2 drone falsificate simultan.
+- `POST /api/v1/training/debrief`: la final, Gemini scrie feedback-ul în română, doar din cifrele măsurate.
+- **Scorul** (0–100) e calculat în browser din jurnalul cu lanț de hash: timpul de la fiecare recomandare la decizie (ținta: sub 10 s), deciziile ratate, timpul cu drone pe roșu, dronele prinse în vreme peste limită. AI-ul nu dă scorul.
+- Fără backend sau fără Gemini (503), joacă un adversar local cu reguli, iar debrief-ul local folosește aceleași cifre. Adversarul nu are acces la drone sau la comenzi: doar alege evenimente pentru simulatorul din browser.
 
 ---
 

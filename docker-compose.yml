@@ -39,7 +39,7 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-orion_gcs}
       MYSQL_USER: ${MYSQL_USER:-orion}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-orion_secret}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MAVLINK_OUT_HOST: host.docker.internal  # QGroundControl on the host, UDP 14550
     extra_hosts:
       - "host.docker.internal:host-gateway"

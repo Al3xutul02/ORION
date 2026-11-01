@@ -1,0 +1,106 @@
+<div class="login-wrapper">
+  <div class="login-card">
+    <header class="login-header">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="brand-icon">
+          <circle cx="12" cy="12" r="10" />
+          <circle cx="12" cy="12" r="5.5" />
+          <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+        </svg>
+        <div class="titles">
+          <h1>ORION GCS</h1>
+          <span class="sub">Tactical Swarm Defense System &middot; Access Control</span>
+        </div>
+      </div>
+    </header>
+
+    @if (errorMessage()) {
+      <div class="auth-error" role="alert">
+        <span class="error-icon">&#9888;</span>
+        <span class="error-text">{{ errorMessage() }}</span>
+      </div>
+    }
+
+    <form class="login-form" (ngSubmit)="onSubmit()">
+      <div class="form-group">
+        <label for="username">Operator / Commander ID</label>
+        <input
+          id="username"
+          type="text"
+          class="form-control"
+          placeholder="e.g. operator_demo or commander_demo"
+          [value]="username()"
+          (input)="username.set($any($event.target).value)"
+          autocomplete="username"
+          required
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="password">Security Clearance Key</label>
+        <input
+          id="password"
+          type="password"
+          class="form-control"
+          placeholder="Enter access password"
+          [value]="password()"
+          (input)="password.set($any($event.target).value)"
+          autocomplete="current-password"
+          required
+        />
+      </div>
+
+      <button type="submit" class="btn-submit" [disabled]="isAuthenticating()">
+        @if (isAuthenticating()) {
+          <span class="spinner"></span> Authenticating Clearance...
+        } @else {
+          Access Theatre Operations &rarr;
+        }
+      </button>
+    </form>
+
+    <div class="demo-accounts-section">
+      <div class="divider">
+        <span>PRE-AUTHORIZED DEMO PROFILES</span>
+      </div>
+
+      <div class="demo-grid">
+        <button
+          type="button"
+          class="demo-card operator"
+          (click)="selectDemoUser('operator_demo')"
+          title="Login as operator_demo (password: 123)"
+        >
+          <div class="demo-card-head">
+            <span class="role-badge operator">OPERATOR</span>
+            <span class="demo-id">operator_demo</span>
+          </div>
+          <p class="demo-desc">
+            Deploy &amp; control drones, establish patrol zones, conduct AI tactical training.
+          </p>
+          <div class="demo-pwd mono">Key: 123</div>
+        </button>
+
+        <button
+          type="button"
+          class="demo-card commander"
+          (click)="selectDemoUser('commander_demo')"
+          title="Login as commander_demo (password: 123)"
+        >
+          <div class="demo-card-head">
+            <span class="role-badge commander">COMMANDER</span>
+            <span class="demo-id">commander_demo</span>
+          </div>
+          <p class="demo-desc">
+            Designate safe corridors, declare threat zones, designate objective zones.
+          </p>
+          <div class="demo-pwd mono">Key: 123</div>
+        </button>
+      </div>
+    </div>
+
+    <footer class="login-footer">
+      <span>Simulated military exercise airspace &middot; Role-based access control (RBAC) enforced</span>
+    </footer>
+  </div>
+</div>

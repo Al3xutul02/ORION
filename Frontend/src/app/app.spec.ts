@@ -5,9 +5,11 @@ import { App } from './app';
 import { verifyChain, HashChainLedger } from './core/hash-chain';
 import { evaluateActions } from './core/geo';
 import { DroneState, Zone } from './core/models';
+import { OrionStore } from './core/orion-store.service';
 
 describe('App', () => {
   beforeEach(async () => {
+    sessionStorage.clear();
     localStorage.setItem('orion.mode', 'offline');
     await TestBed.configureTestingModule({
       imports: [App],
@@ -15,16 +17,106 @@ describe('App', () => {
     }).compileComponents();
   });
 
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
   it('should create the app', () => {
     const fixture = TestBed.createComponent(App);
     expect(fixture.componentInstance).toBeTruthy();
   });
 
-  it('should render the ORION command bar', () => {
+  it('should render the login page when no user is logged in', () => {
     const fixture = TestBed.createComponent(App);
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.login-card')).toBeTruthy();
+    expect(compiled.querySelector('h1')?.textContent).toContain('ORION GCS');
+  });
+
+  it('should render the command bar when an authenticated session is active', () => {
+    sessionStorage.setItem('orion.user', JSON.stringify({
+      username: 'operator_demo',
+      role: 'OPERATOR',
+      displayName: 'Operator Demo'
+    }));
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.login-card')).toBeFalsy();
     expect(compiled.querySelector('.brand .name')?.textContent).toContain('ORION');
+    expect(compiled.querySelector('.user-pill')?.textContent).toContain('operator_demo');
+  });
+});
+
+describe('Authentication & Authorization Store', () => {
+  let store: OrionStore;
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient()],
+    });
+    store = TestBed.inject(OrionStore);
+  });
+
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('authenticates operator_demo with correct credentials and role', async () => {
+    const res = await store.login('operator_demo', '123');
+    expect(res.ok).toBeTrue();
+    expect(store.currentUser()?.username).toBe('operator_demo');
+    expect(store.currentUser()?.role).toBe('OPERATOR');
+    expect(store.isOperator()).toBeTrue();
+    expect(store.isCommander()).toBeFalse();
+  });
+
+  it('authenticates commander_demo with correct credentials and role', async () => {
+    const res = await store.login('commander_demo', '123');
+    expect(res.ok).toBeTrue();
+    expect(store.currentUser()?.username).toBe('commander_demo');
+    expect(store.currentUser()?.role).toBe('COMMANDER');
+    expect(store.isOperator()).toBeFalse();
+    expect(store.isCommander()).toBeTrue();
+  });
+
+  it('rejects invalid password', async () => {
+    const res = await store.login('operator_demo', 'wrong');
+    expect(res.ok).toBeFalse();
+    expect(store.currentUser()).toBeNull();
+  });
+
+  it('clears session on logout', async () => {
+    await store.login('operator_demo', '123');
+    expect(store.currentUser()).toBeTruthy();
+    store.logout();
+    expect(store.currentUser()).toBeNull();
+    expect(sessionStorage.getItem('orion.user')).toBeNull();
+  });
+
+  it('allows Operator to move a patrol zone and updates zone center', async () => {
+    await store.login('operator_demo', '123');
+    store.setMode('offline');
+    const pz = store.zones().find(z => z.zone_type === 'PATROL');
+    expect(pz).toBeTruthy();
+    const targetZoneId = pz!.id;
+    const newCenter: [number, number] = [44.345, 23.845];
+    await store.movePatrolZone(targetZoneId, newCenter);
+    const updated = store.zones().find(z => z.id === targetZoneId);
+    expect(updated?.center).toEqual(newCenter);
+  });
+
+  it('prevents Commander from moving a patrol zone', async () => {
+    await store.login('commander_demo', '123');
+    store.setMode('offline');
+    const pz = store.zones().find(z => z.zone_type === 'PATROL');
+    expect(pz).toBeTruthy();
+    const oldCenter = [...pz!.center!] as [number, number];
+    await store.movePatrolZone(pz!.id, [44.35, 23.85]);
+    const unchanged = store.zones().find(z => z.id === pz!.id);
+    expect(unchanged?.center).toEqual(oldCenter);
   });
 });
 

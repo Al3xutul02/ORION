@@ -2,12 +2,12 @@
 // FLEET_UPDATE WebSocket payload (Backend/app/services/simulator.py).
 
 export type TrustStatus = 'GREEN' | 'YELLOW' | 'RED';
-export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'WEATHER' | 'PATROL';
+export type ZoneType = 'BASE' | 'SAFE_CORRIDOR' | 'INTERFERENCE' | 'THREAT' | 'WEATHER' | 'PATROL' | 'OBJECTIVE';
 export type WeatherKind = 'STORM' | 'RAIN' | 'WIND';
 export type DataMode = 'live' | 'offline';
 export type LinkState = 'connecting' | 'online' | 'offline';
-export type ZoneTactic = 'SECTOR_ORBIT_SHIFT' | 'TIGHT_MESH' | 'WIDE_RECON' | 'EGRESS_CORRIDOR' | 'RESYNC_EQUIDISTANT';
-export type MapMode = 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter';
+export type ZoneTactic = 'TIGHT_MESH' | 'WIDE_RECON' | 'EGRESS_CORRIDOR' | 'RESYNC_EQUIDISTANT';
+export type MapMode = 'view' | 'create_patrol' | 'move_patrol' | 'create_threat' | 'create_corridor' | 'create_objective' | 'delete_zone' | 'pick_loiter';
 
 export interface ScoreBreakdown {
   drone_id: number;
@@ -43,6 +43,8 @@ export interface DroneState {
   reason: string;
   scores?: ScoreBreakdown;
   patrol_zone_id?: number;
+  target_waypoints?: [number, number][];
+  eta_s?: number;
   /** Drone-to-drone mesh view (Backend/app/services/mesh.py, core/mesh.ts). */
   mesh?: MeshView | null;
   /** SIM = ORION's simulator; MAVLINK = an external vehicle (SITL, real drone) heard over UDP. */
@@ -95,6 +97,7 @@ export interface FleetUpdate {
   drones: DroneState[];
   random_interval_min?: number;
   random_interval_max?: number;
+  random_events_enabled?: boolean;
 }
 
 export interface SnapshotMessage {
@@ -184,29 +187,12 @@ export interface CopilotMessage {
   meta?: string;
 }
 
-export interface ScenarioStep {
-  at: number; // seconds
-  label: string;
-  detail: string;
+export type UserRole = 'OPERATOR' | 'COMMANDER';
+
+export interface AppUser {
+  username: string;
+  role: UserRole;
+  displayName: string;
+  token?: string;
 }
 
-// Spec "Scenariu demo de 3 minute", as the backend simulator runs it.
-export const SCENARIO: ScenarioStep[] = [
-  { at: 0, label: 'Context', detail: 'Four drones patrol the sector, everything nominal' },
-  { at: 30, label: 'GPS spoofing on Drone 2', detail: 'Position jumps, trust drops, consensus isolates it' },
-  { at: 60, label: 'What is safe now', detail: 'RTL blocked by interference zone, loiter + corridor recommended' },
-  { at: 100, label: 'Replayed command', detail: 'An old signed command is retransmitted and rejected' },
-  { at: 130, label: 'Zone interference', detail: 'Two drones lose GPS, sector marked, patrol reallocated' },
-  { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
-];
-
-// Extended conflict exercise run by the offline simulator (same beats, plus mobile EW and link loss).
-export const SCENARIO_EXTENDED: ScenarioStep[] = [
-  { at: 0, label: 'Context', detail: 'Six drones patrol two sectors over the Craiova exercise area' },
-  { at: 30, label: 'GPS spoofing on D2', detail: 'Position jumps, trust drops, consensus isolates it' },
-  { at: 60, label: 'What is safe now', detail: 'RTL blocked by interference zone, loiter + corridor recommended' },
-  { at: 100, label: 'Replay', detail: 'An old signed command is retransmitted and rejected' },
-  { at: 112, label: 'Mobile jammer', detail: 'Hostile emitter moves in; one drone hit = local fault, several = zone mapped and tracked' },
-  { at: 145, label: 'Link lost on D5', detail: 'After 5 s ORION applies the failsafe, filtered by zone rules' },
-  { at: 160, label: 'Report', detail: 'Post-action report exported, hash chain verified' },
-];

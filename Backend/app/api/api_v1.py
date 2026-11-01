@@ -6,14 +6,20 @@ from app.api.endpoints import (
     aar_router,
     simulation_router,
     copilot_router,
-    mavlink_router
+    training_router,
+    radio_router,
+    mavlink_router,
+    auth_router,
 )
 
 api_router = APIRouter()
+api_router.include_router(auth_router)
 api_router.include_router(drones_router)
 api_router.include_router(zones_router)
 api_router.include_router(actions_router)
 api_router.include_router(aar_router)
 api_router.include_router(simulation_router)
 api_router.include_router(copilot_router)
+api_router.include_router(training_router)
+api_router.include_router(radio_router)
 api_router.include_router(mavlink_router)

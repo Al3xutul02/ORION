@@ -1,0 +1,59 @@
+<section class="panel">
+  <header class="panel-head">
+    <h2>Radio</h2>
+    <span class="chip mono">{{ store.radioEntries().length }}</span>
+    <span class="spacer"></span>
+    @if (store.radio() === 'recording') {
+      <span class="live"><span class="dot"></span>REC</span>
+    } @else if (store.radio() === 'transcribing') {
+      <span class="live busy">Transcriu…</span>
+    }
+  </header>
+
+  @if (drones().length || kinds().length > 1) {
+    <div class="filters" role="group" aria-label="Filter transmissions">
+      @for (d of drones(); track d) {
+        <button type="button" class="f" [class.on]="droneFilter() === d" (click)="toggleDrone(d)">D{{ d }}</button>
+      }
+      @if (kinds().length > 1) {
+        <span class="sep"></span>
+        @for (k of kinds(); track k) {
+          <button type="button" class="f kind k-{{ k }}" [class.on]="kindFilter() === k" (click)="toggleKind(k)">{{ kindLabels[k] }}</button>
+        }
+      }
+    </div>
+  }
+
+  <div class="list" #list>
+    @for (e of shown(); track e.id) {
+      <button
+        type="button"
+        class="tx"
+        [class.mine]="e.speaker === 'OPERATOR_1'"
+        [class.sim]="e.simulated"
+        [class.active]="isActive(e)"
+        (click)="jump(e)"
+        [title]="'Arată în jurnal ce se întâmpla la ' + clock(e.missionTime)"
+      >
+        <span class="meta">
+          <span class="t mono">{{ clock(e.missionTime) }}</span>
+          <span class="who mono">{{ e.speaker }}</span>
+          <span class="kind k-{{ e.kind }}">{{ kindLabels[e.kind] }}</span>
+          @for (d of e.drones; track d) {
+            <span class="drone mono" role="button" tabindex="-1" (click)="selectDrone($event, d)" title="Selectează pe hartă">D{{ d }}</span>
+          }
+          @if (e.simulated) { <span class="simtag">simulat</span> }
+        </span>
+        <span class="text">„{{ e.text }}”</span>
+      </button>
+    } @empty {
+      <p class="empty">
+        @if (store.radioEntries().length) {
+          Nicio transmisie pentru filtrul ales.
+        } @else {
+          Nicio transmisie încă. Ține apăsat <strong>🎙 PTT</strong> sau <strong>Space</strong> și vorbește.
+        }
+      </p>
+    }
+  </div>
+</section>

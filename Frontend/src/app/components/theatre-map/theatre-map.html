@@ -1,7 +1,7 @@
 <div
   class="map"
   #map
-  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'pick_loiter'"
+  [class.mode-crosshair]="store.mapMode() === 'create_patrol' || store.mapMode() === 'move_patrol' || store.mapMode() === 'create_threat' || store.mapMode() === 'create_corridor' || store.mapMode() === 'create_objective' || store.mapMode() === 'pick_loiter'"
   [class.mode-delete]="store.mapMode() === 'delete_zone'"
 ></div>
 
@@ -15,21 +15,49 @@
       <span class="mode-text">Click and drag on map to define patrol center and radius</span>
     } @else if (store.mapMode() === 'create_threat') {
       <span class="mode-icon danger">&#9888;</span>
-      <span class="mode-text">Click and drag on map to define restricted threat center and radius</span>
+      <span class="mode-text">Click vertices on map ({{ threatPoints().length }} added). Double-click or click Finish (min 3 points).</span>
+      <button
+        type="button"
+        class="btn-finish-corridor btn-finish-threat"
+        [disabled]="threatPoints().length < 3"
+        (click)="finishThreat()"
+      >
+        &#10003; Finish Threat Zone ({{ threatPoints().length }})
+      </button>
     } @else if (store.mapMode() === 'create_corridor') {
       <span class="mode-icon ok">&#10148;</span>
-      <span class="mode-text">Click waypoints on map ({{ corridorPoints.length }} points added). Double-click or click Finish.</span>
+      <span class="mode-text">Click waypoints on map ({{ corridorPoints().length }} points added). Double-click or click Finish.</span>
       <button
         type="button"
         class="btn-finish-corridor"
-        [disabled]="corridorPoints.length < 2"
+        [disabled]="corridorPoints().length < 2"
         (click)="finishCorridor()"
       >
-        &#10003; Finish Corridor ({{ corridorPoints.length }})
+        &#10003; Finish Corridor ({{ corridorPoints().length }})
+      </button>
+    } @else if (store.mapMode() === 'create_objective') {
+      <span class="mode-icon objective">&#9670;</span>
+      <span class="mode-text">Click points on map ({{ objectivePoints().length }} added). Double-click or click Finish (min 2 points).</span>
+      <button
+        type="button"
+        class="btn-finish-corridor"
+        [disabled]="objectivePoints().length < 2"
+        (click)="finishObjective()"
+      >
+        &#10003; Finish Objective ({{ objectivePoints().length }})
       </button>
     } @else if (store.mapMode() === 'delete_zone') {
       <span class="mode-icon">&#10005;</span>
-      <span class="mode-text">Click on any tactical zone (patrol, threat, corridor) to delete it</span>
+      <span class="mode-text">Click on any tactical zone (patrol, threat, corridor, objective) to delete it</span>
+    } @else if (store.mapMode() === 'move_patrol') {
+      <span class="mode-icon">&#8644;</span>
+      <span class="mode-text">
+        @if (movingZone(); as z) {
+          Click on map to place <strong>{{ z.name }}</strong> at new coordinates ({{ store.pathType() }} Profile)
+        } @else {
+          Click on a patrol zone, then click new coordinates on the map
+        }
+      </span>
     } @else if (store.mapMode() === 'pick_loiter') {
       <span class="mode-icon">&#9678;</span>
       <span class="mode-text">Click on map to select loiter destination</span>
@@ -42,6 +70,7 @@
   <span><i class="sw base"></i>Base</span>
   <span><i class="sw patrol"></i>Patrol zone</span>
   <span><i class="sw corridor"></i>Safe corridor</span>
+  <span><i class="sw objective"></i>Objective zone</span>
   <span><i class="sw interference"></i>Interference</span>
   <span><i class="sw threat"></i>Threat</span>
   <span><i class="sw weather"></i>Weather</span>
@@ -52,6 +81,9 @@
   @if (basemap() === 'real') {
     <span class="note">Exercise zones over a real map</span>
   }
+  @if (view3d()) {
+    <span class="note">3D: heights &times;{{ exaggeration }}</span>
+  }
 </div>
 
 <div class="overlay-tr">
@@ -60,33 +92,55 @@
   }
 
   <div class="zone-tools" role="group" aria-label="Tactical Zone Controls">
-    <button
-      type="button"
-      class="btn sm tool-btn"
-      [class.active]="store.mapMode() === 'create_patrol'"
-      (click)="toggleMapMode('create_patrol')"
-      title="Create new patrol zone by dragging on map"
-    >
-      + Patrol Zone
-    </button>
-    <button
-      type="button"
-      class="btn sm tool-btn corridor-btn"
-      [class.active]="store.mapMode() === 'create_corridor'"
-      (click)="toggleMapMode('create_corridor')"
-      title="Create new safe corridor by clicking waypoints"
-    >
-      + Safe Corridor
-    </button>
-    <button
-      type="button"
-      class="btn sm tool-btn threat-btn"
-      [class.active]="store.mapMode() === 'create_threat'"
-      (click)="toggleMapMode('create_threat')"
-      title="Create new threat zone by dragging on map"
-    >
-      + Threat Zone
-    </button>
+    @if (store.isOperator()) {
+      <button
+        type="button"
+        class="btn sm tool-btn"
+        [class.active]="store.mapMode() === 'create_patrol'"
+        (click)="toggleMapMode('create_patrol')"
+        title="Create new patrol zone by dragging on map"
+      >
+        + Patrol Zone
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn"
+        [class.active]="store.mapMode() === 'move_patrol'"
+        (click)="toggleMapMode('move_patrol')"
+        title="Move patrol zone: click to select, then click new map location"
+      >
+        &#8644; Move Patrol Zone
+      </button>
+    }
+    @if (store.isCommander()) {
+      <button
+        type="button"
+        class="btn sm tool-btn corridor-btn"
+        [class.active]="store.mapMode() === 'create_corridor'"
+        (click)="toggleMapMode('create_corridor')"
+        title="Create new safe corridor by clicking waypoints"
+      >
+        + Safe Corridor
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn objective-btn"
+        [class.active]="store.mapMode() === 'create_objective'"
+        (click)="toggleMapMode('create_objective')"
+        title="Create new polygonal objective zone by clicking vertices"
+      >
+        + Objective Zone
+      </button>
+      <button
+        type="button"
+        class="btn sm tool-btn threat-btn"
+        [class.active]="store.mapMode() === 'create_threat'"
+        (click)="toggleMapMode('create_threat')"
+        title="Create new threat zone by dragging on map"
+      >
+        + Threat Zone
+      </button>
+    }
     <button
       type="button"
       class="btn sm tool-btn danger"
@@ -102,5 +156,13 @@
     <button type="button" [class.on]="basemap() === 'real'" (click)="setBasemap('real')">Real map</button>
     <button type="button" [class.on]="basemap() === 'grid'" (click)="setBasemap('grid')">Grid</button>
   </div>
+  <button
+    class="btn sm"
+    type="button"
+    [class.primary]="view3d()"
+    [attr.aria-pressed]="view3d()"
+    (click)="toggle3d()"
+    title="3D view: terrain and drone altitudes (heights exaggerated). Right-drag or Ctrl-drag to rotate and tilt."
+  >3D</button>
   <button class="btn sm" type="button" (click)="recenter()">Recenter</button>
 </div>

@@ -1,10 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { ORION_CONFIG } from '../../core/config';
-import { SCENARIO_EXTENDED } from '../../core/models';
 import { OrionStore } from '../../core/orion-store.service';
-
-const DEMO_LENGTH_S = 180;
+import { MOVE_LABELS } from '../../core/training';
 
 @Component({
   selector: 'app-command-bar',
@@ -15,7 +13,7 @@ const DEMO_LENGTH_S = 180;
 })
 export class CommandBar {
   protected store = inject(OrionStore);
-  protected scenario = computed(() => SCENARIO_EXTENDED);
+  protected readonly moveLabels = MOVE_LABELS;
   protected apiBase = ORION_CONFIG.apiBase;
   protected speeds = [1, 2, 4];
 
@@ -24,17 +22,23 @@ export class CommandBar {
     return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   });
 
-  protected progress = computed(() => Math.min(100, (this.store.elapsed() / DEMO_LENGTH_S) * 100));
-
-  protected stepPos(at: number): number {
-    return (at / DEMO_LENGTH_S) * 100;
-  }
-
-  protected currentStep = computed(() => {
-    const t = this.store.elapsed();
-    const steps = this.scenario();
-    return [...steps].reverse().find(s => t >= s.at) ?? steps[0];
+  protected trainingRemaining = computed(() => {
+    const t = this.store.training();
+    if (!t) return '';
+    const left = Math.max(0, Math.ceil(t.lengthS - (this.store.elapsed() - t.startedAt)));
+    return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
   });
+
+  /** How far the AI-training session is, 0-100. */
+  protected progress = computed(() => {
+    const t = this.store.training();
+    return t ? Math.min(100, ((this.store.elapsed() - t.startedAt) / t.lengthS) * 100) : 0;
+  });
+
+  protected movePos(atS: number): number {
+    const t = this.store.training();
+    return t ? Math.min(100, (atS / t.lengthS) * 100) : 0;
+  }
 
   protected liveTheatreSummary = computed(() => {
     const zs = this.store.zones();

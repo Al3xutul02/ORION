@@ -41,6 +41,9 @@ class DroneState(BaseModel):
     trust_status: str
     uncertainty_radius_m: float
     reason: str
+    patrol_zone_id: Optional[int] = None
+    target_waypoints: Optional[List[List[float]]] = None
+    eta_s: Optional[int] = None
     last_updated: datetime
 
 

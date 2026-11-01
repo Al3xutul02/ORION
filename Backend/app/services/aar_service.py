@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -8,6 +9,11 @@ from app.core.security import GENESIS_HASH, calculate_event_hash, verify_hash_ch
 from app.schemas.audit import AARVerificationReport, AARExportReport, AuditEventResponse
 
 logger = logging.getLogger("orion.aar")
+
+# Request threads (approvals, commands, radio) and the simulator loop all append to the chain.
+# Reading the last hash and inserting the next record must be one step, or two writers link to
+# the same predecessor and fork the chain.
+_append_lock = threading.Lock()
 
 
 class AARService:
@@ -27,6 +33,12 @@ class AARService:
         """
         Appends a new event into the audit log linked to the preceding entry's cryptographic hash.
         """
+        with _append_lock:
+            return self._append(db, event_type, drone_id, details, operator_id)
+
+    def _append(
+        self, db: Session, event_type: str, drone_id: Optional[int], details: Dict[str, Any] | str, operator_id: str,
+    ) -> AuditLog:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
         details_str = json.dumps(details, sort_keys=True) if isinstance(details, dict) else str(details)

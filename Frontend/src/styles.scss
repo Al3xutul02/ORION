@@ -24,6 +24,7 @@
 
   --zone-base: #5cc8ff;
   --zone-corridor: #3ddc84;
+  --zone-objective: #f59e0b;
   --zone-interference: #ff9f43;
   --zone-threat: #ff5463;
 
@@ -84,11 +85,23 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  min-height: 46px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   flex: none;
+  box-sizing: border-box;
+  overflow: hidden;
+
+  > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 
   h2 {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -96,7 +109,8 @@ button {
   }
 
   .spacer {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
   }
 }
 

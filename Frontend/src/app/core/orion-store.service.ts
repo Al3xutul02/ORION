@@ -3,11 +3,22 @@ import { ORION_CONFIG } from './config';
 import { ActionOption, distanceM, evaluateActions } from './geo';
 import { verifyChain } from './hash-chain';
 import {
-  AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, Recommendation, SocketMessage, Zone,
+  AppUser, AuditEvent, ChainVerification, CopilotMessage, DataMode, DroneState, FleetUpdate, LinkState, MapMode, Recommendation, SocketMessage, Zone,
 } from './models';
 import { HttpErrorResponse } from '@angular/common/http';
 import { OfflineSimulator } from './offline-simulator';
 import { OrionApi, SimulationAction } from './orion-api.service';
+import { RadioEntry, radioEntry } from './radio';
+import { RlPolicy, pickRlMove } from './rl-adversary';
+import policyJson from './adversary-policy.json';
+
+/** Trained offline by scripts/train-adversary.ts (npm run train:adversary). */
+const RL_POLICY = policyJson as RlPolicy;
+export type AdversaryChoice = 'RL' | 'GEMINI';
+import {
+  AdversaryMove, AdversaryMoveKind, FIRST_MOVE_AT_S, SESSION_LENGTH_S, TARGET_REACTION_S, TrainingDebrief, decisionsFromLog, localAdversary, localDebrief,
+  scoreSession, seededRandom,
+} from './training';
 
 export interface Toast {
   id: number;
@@ -33,6 +44,21 @@ export type Trigger =
   | 'weather-clear';
 
 const HISTORY_LEN = 90;
+
+/** An AI training session in Demo mode (core/training.ts). */
+export interface TrainingSession {
+  phase: 'running' | 'debriefing' | 'done';
+  startedAt: number;
+  lengthS: number;
+  nextMoveAt: number;
+  requesting: boolean;
+  /** Who plays the adversary: the trained RL policy, Gemini on the backend, or the local rules once Gemini failed. */
+  adversary: 'RL' | 'AI' | 'LOCAL';
+  moves: AdversaryMove[];
+  redSeconds: Record<number, number>;
+  lastElapsed: number;
+  debrief: TrainingDebrief | null;
+}
 
 /** Events worth interrupting the operator for, with how loud they are. */
 const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
@@ -62,11 +88,68 @@ const ALERTS: Record<string, { level: Toast['level']; title: string }> = {
 
 /**
  * Single source of truth for the dashboard. In "live" mode it listens to the backend
- * WebSocket and polls REST; in "offline" (Demo) mode it drives the deterministic 3-minute demo simulator.
+ * WebSocket and polls REST; in "offline" (Demo) mode it runs AI-training sessions on the in-browser simulator.
  */
 @Injectable({ providedIn: 'root' })
 export class OrionStore implements OnDestroy {
   private api = inject(OrionApi);
+
+  readonly currentUser = signal<AppUser | null>(this.loadPersistedUser());
+  readonly isOperator = computed(() => this.currentUser()?.role === 'OPERATOR');
+  readonly isCommander = computed(() => this.currentUser()?.role === 'COMMANDER');
+
+  private loadPersistedUser(): AppUser | null {
+    try {
+      const raw = sessionStorage.getItem('orion.user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async login(username: string, password: string): Promise<{ ok: boolean; message?: string }> {
+    try {
+      let user: AppUser | null = null;
+      if (this.mode() === 'live') {
+        try {
+          user = await this.api.login(username, password);
+        } catch (e: any) {
+          if (e?.status === 401) {
+            return { ok: false, message: 'Invalid username or password' };
+          }
+        }
+      }
+      if (!user) {
+        if (username === 'operator_demo' && password === '123') {
+          user = { username: 'operator_demo', role: 'OPERATOR', displayName: 'Operator Demo', token: 'offline-token-operator_demo' };
+        } else if (username === 'commander_demo' && password === '123') {
+          user = { username: 'commander_demo', role: 'COMMANDER', displayName: 'Commander Demo', token: 'offline-token-commander_demo' };
+        } else {
+          return { ok: false, message: 'Invalid username or password' };
+        }
+      }
+
+      this.currentUser.set(user);
+      try {
+        sessionStorage.setItem('orion.user', JSON.stringify(user));
+      } catch {}
+      this.pushToast('ok', `Logged in as ${user.displayName}`, `Access Level: ${user.role}`);
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, message: err?.message || 'Authentication failed' };
+    }
+  }
+
+  logout(): void {
+    const prev = this.currentUser();
+    this.currentUser.set(null);
+    try {
+      sessionStorage.removeItem('orion.user');
+    } catch {}
+    if (prev) {
+      this.pushToast('info', 'Logged out', `Session ended for ${prev.username}`);
+    }
+  }
 
   readonly mode = signal<DataMode>(this.savedMode());
   readonly link = signal<LinkState>('connecting');
@@ -86,15 +169,28 @@ export class OrionStore implements OnDestroy {
   readonly busy = signal(false);
   readonly randomIntervalMin = signal<number>(this.savedIntervalMin());
   readonly randomIntervalMax = signal<number>(this.savedIntervalMax());
+  readonly randomEventsEnabled = signal<boolean>(this.savedRandomEventsEnabled());
   readonly copilot = signal<CopilotMessage[]>([]);
   readonly copilotBusy = signal(false);
   /** Log records the operator asked to see (copilot citations); the log scrolls to them. */
   readonly highlightedEvents = signal<number[]>([]);
-  readonly mapMode = signal<'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'>('view');
+  readonly mapMode = signal<MapMode>('view');
   readonly pickedLoiterPoint = signal<[number, number] | null>(null);
+  readonly movingZoneId = signal<number | null>(null);
+  readonly pathType = signal<'SAFE' | 'RISKY'>('SAFE');
+  readonly training = signal<TrainingSession | null>(null);
+  /** Who plays the opposing force in AI training; remembered. */
+  readonly adversaryChoice = signal<AdversaryChoice>(this.savedAdversary());
+  /** Push-to-talk: idle, keyed (recording) or waiting for the transcript. */
+  readonly radio = signal<'idle' | 'recording' | 'transcribing'>('idle');
+  readonly radioSeconds = signal(0);
+  /** Every transmission in the log, oldest first (the Radio panel). */
+  readonly radioEntries = computed(() => this.events().map(radioEntry).filter((e): e is RadioEntry => e !== null));
+  /** What was just said about each drone, shown as a bubble on the map for a few seconds. */
+  readonly radioBubbles = signal<Record<number, { text: string; speaker: string; id: number }>>({});
   readonly commandScope = signal<'drone' | 'zone'>('drone');
 
-  setMapMode(mode: 'view' | 'create_patrol' | 'create_threat' | 'create_corridor' | 'delete_zone' | 'pick_loiter'): void {
+  setMapMode(mode: MapMode): void {
     this.mapMode.set(mode);
   }
 
@@ -104,6 +200,14 @@ export class OrionStore implements OnDestroy {
 
   setPickedLoiterPoint(point: [number, number] | null): void {
     this.pickedLoiterPoint.set(point);
+  }
+
+  setMovingZoneId(id: number | null): void {
+    this.movingZoneId.set(id);
+  }
+
+  setPathType(type: 'SAFE' | 'RISKY'): void {
+    this.pathType.set(type);
   }
 
   readonly selectedDrone = computed(() => this.drones().find(d => d.drone_id === this.selectedDroneId()) ?? null);
@@ -171,6 +275,7 @@ export class OrionStore implements OnDestroy {
     this.verification.set(null);
     this.trustHistory.set({});
     this.clearCopilot();
+    this.training.set(null);
     this.lastAlertedId = 0;
     this.elapsed.set(0);
     if (mode === 'live') this.connectLive(allowFallback);
@@ -218,7 +323,7 @@ export class OrionStore implements OnDestroy {
     this.socket = ws;
     ws.onopen = () => {
       this.link.set('online');
-      this.api.setRandomInterval(this.randomIntervalMin(), this.randomIntervalMax()).catch(() => {});
+      this.api.setRandomInterval(this.randomIntervalMin(), this.randomIntervalMax(), this.randomEventsEnabled()).catch(() => {});
     };
     ws.onmessage = ev => {
       try {
@@ -283,15 +388,157 @@ export class OrionStore implements OnDestroy {
         this.randomIntervalMax.set(u.random_interval_max);
       }
     }
+    if (u.random_events_enabled !== undefined) {
+      if (this.randomEventsEnabled() !== u.random_events_enabled) {
+        this.randomEventsEnabled.set(u.random_events_enabled);
+      }
+    }
     this.trustHistory.update(h => {
       const next = { ...h };
       for (const d of u.drones) next[d.drone_id] = [...(h[d.drone_id] ?? []), d.trust_score].slice(-HISTORY_LEN);
       return next;
     });
+    if (this.selectedDroneId() !== null && !u.drones.some(d => d.drone_id === this.selectedDroneId())) {
+      this.selectedDroneId.set(null);
+    }
+    if (this.detailsDroneId() !== null && !u.drones.some(d => d.drone_id === this.detailsDroneId())) {
+      this.detailsDroneId.set(null);
+    }
     if (this.selectedDroneId() === null) {
       const worst = [...u.drones].sort((a, b) => a.trust_score - b.trust_score)[0];
       if (worst && worst.trust_status !== 'GREEN') this.selectedDroneId.set(worst.drone_id);
     }
+    if (this.training()?.phase === 'running') this.trainingTick(u);
+  }
+
+  // ---- AI training (Demo) ------------------------------------------------------------------
+
+  /** Starts a fresh Demo run where an adversary, not the fixed script, stages the attacks. */
+  async startTraining(): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can enter AI Training.');
+      return;
+    }
+    if (this.mode() !== 'offline') this.setMode('offline');
+    await this.reset();
+    if (!this.offline) return;
+    this.training.set({
+      phase: 'running', startedAt: this.elapsed(), lengthS: SESSION_LENGTH_S, nextMoveAt: this.elapsed() + FIRST_MOVE_AT_S,
+      requesting: false, adversary: this.adversaryChoice() === 'RL' ? 'RL' : 'AI', moves: [], redSeconds: {}, lastElapsed: this.elapsed(), debrief: null,
+    });
+    await this.start();
+  }
+
+  /** Ends the session now (or when time is up) and builds the debrief. */
+  async finishTraining(): Promise<void> {
+    const t = this.training();
+    if (!t || t.phase !== 'running' || !this.offline) return;
+    this.offline.stop();
+    this.running.set(false);
+    this.training.set({ ...t, phase: 'debriefing' });
+
+    const end = this.elapsed();
+    const events = this.offline.ledger.events;
+    const decisions = decisionsFromLog(events, t.startedAt, end);
+    const breaches = events.filter(e => e.event_type === 'WEATHER_LIMIT_EXCEEDED').length;
+    const { score, grade, lines } = scoreSession(decisions, t.redSeconds, breaches, end);
+    let text = localDebrief(decisions, t.redSeconds, score, grade);
+    let source: 'AI' | 'LOCAL' = 'LOCAL';
+    let model: string | undefined;
+    try {
+      const res = await this.api.trainingDebrief({
+        score, duration_s: Math.round(end - t.startedAt),
+        decisions: decisions.map(d => ({ drone_id: d.droneId, action: d.action, issued_at_s: d.issuedAt, reaction_s: d.reactionS, outcome: d.outcome })),
+        red_seconds: Object.fromEntries(Object.entries(t.redSeconds).map(([k, v]) => [k, Math.round(v)])),
+        attacks: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone, reason: m.reason })),
+        extra: { grade, deductions: lines, target_reaction_s: TARGET_REACTION_S, weather_breaches: breaches },
+      });
+      text = { summary: res.summary, strengths: res.strengths, improvements: res.improvements };
+      source = 'AI';
+      model = res.model;
+    } catch { /* backend or Gemini unavailable: keep the local debrief */ }
+    const now = this.training();
+    if (now?.phase !== 'debriefing') return; // reset while waiting
+    this.training.set({ ...now, phase: 'done', debrief: { score, grade, lines, decisions, ...text, source, model } });
+  }
+
+  /** Closes the debrief; the next Start begins a new session. */
+  async closeTraining(): Promise<void> {
+    await this.reset();
+  }
+
+  private trainingTick(u: FleetUpdate): void {
+    const t = this.training()!;
+    const dt = Math.max(0, u.elapsed_time - t.lastElapsed);
+    const redSeconds = { ...t.redSeconds };
+    for (const d of u.drones) if (d.trust_status === 'RED') redSeconds[d.drone_id] = (redSeconds[d.drone_id] ?? 0) + dt;
+    this.training.set({ ...t, redSeconds, lastElapsed: u.elapsed_time });
+    if (u.elapsed_time - t.startedAt >= t.lengthS) {
+      void this.finishTraining();
+    } else if (u.elapsed_time >= t.nextMoveAt && !t.requesting) {
+      void this.adversaryTurn();
+    }
+  }
+
+  private async adversaryTurn(): Promise<void> {
+    const sim = this.offline;
+    const t = this.training();
+    if (!sim || !t) return;
+    this.training.set({ ...t, requesting: true });
+    const options = sim.adversaryOptions();
+    const now = this.elapsed();
+    const decisions = decisionsFromLog(sim.ledger.events, t.startedAt, now);
+    const resolved = decisions.filter(d => d.reactionS !== null);
+    const avgReaction = resolved.length ? resolved.reduce((a, d) => a + d.reactionS!, 0) / resolved.length : null;
+    const pending = this.pendingRecommendations().map(r => {
+      const issued = decisions.find(d => d.recId === r.id)?.issuedAt ?? now;
+      return { droneId: r.drone_id, action: r.recommended_action, waitingS: Math.round(now - issued) };
+    });
+
+    let move: AdversaryMove | null = null;
+    if (t.adversary === 'RL') {
+      move = pickRlMove(RL_POLICY, {
+        pending: pending.length,
+        red: this.drones().filter(d => d.trust_status === 'RED').length,
+        jammerActive: !options.available.includes('JAMMER'),
+        t: now - t.startedAt,
+        lastMove: t.moves.at(-1)?.move ?? null,
+      }, options, seededRandom(Math.round(now * 1000) + t.moves.length * 7919));
+    } else if (t.adversary === 'AI') {
+      try {
+        const res = await this.api.trainingMove({
+          elapsed_s: Math.round(now - t.startedAt), remaining_s: Math.round(t.lengthS - (now - t.startedAt)),
+          available: options.available, eligible: options.eligible,
+          drones: this.drones().map(d => ({ id: d.drone_id, status: d.trust_status, trust: Math.round(d.trust_score), mode: d.flight_mode })),
+          pending_decisions: pending.map(p => ({ drone_id: p.droneId, action: p.action, waiting_s: p.waitingS })),
+          operator: {
+            decisions: decisions.length, avg_reaction_s: avgReaction === null ? null : Math.round(avgReaction),
+            slowest_reaction_s: resolved.length ? Math.round(Math.max(...resolved.map(d => d.reactionS!))) : null,
+            missed: decisions.filter(d => d.reactionS === null).length,
+          },
+          history: t.moves.map(m => ({ at_s: m.at_s, move: m.move, target: m.target_drone })),
+        });
+        move = { move: res.move, target_drone: res.target_drone, wait_s: res.wait_s, reason: res.reason, source: 'AI' };
+      } catch {
+        this.pushToast('info', 'Adversar local', 'Gemini nu răspunde: adversarul continuă cu regulile locale.');
+      }
+    }
+    const current = this.training();
+    if (!current || current.phase !== 'running' || this.offline !== sim) return; // ended while we waited
+    const rnd = seededRandom(Math.round(now * 1000) + current.moves.length);
+    move ??= localAdversary(options, pending, current.moves, avgReaction, rnd);
+    // The AI's choice was made a few seconds ago: if it's no longer possible, play locally.
+    if (!sim.applyAdversaryMove(move.move, move.target_drone)) {
+      move = localAdversary(sim.adversaryOptions(), pending, current.moves, avgReaction, rnd);
+      sim.applyAdversaryMove(move.move, move.target_drone, 'LOCAL_ADVERSARY');
+    }
+    this.training.set({
+      ...current,
+      requesting: false,
+      adversary: move.source === 'LOCAL' && current.adversary === 'AI' ? 'LOCAL' : current.adversary,
+      moves: [...current.moves, { ...move, at_s: Math.round(this.elapsed() - current.startedAt) }],
+      nextMoveAt: this.elapsed() + move.wait_s,
+    });
   }
 
   private setEvents(events: AuditEvent[]): void {
@@ -305,6 +552,7 @@ export class OrionStore implements OnDestroy {
       return;
     }
     for (const e of fresh) {
+      if (e.event_type === 'RADIO_TRANSMISSION') this.showBubbles(e);
       const alert = ALERTS[e.event_type];
       if (alert) {
         this.pushToast(alert.level, alert.title, summarise(e));
@@ -320,6 +568,8 @@ export class OrionStore implements OnDestroy {
 
   async start(): Promise<void> {
     if (this.offline) {
+      // Demo is AI training: Start begins a session, or resumes the one that is paused.
+      if (this.training()?.phase !== 'running') return this.startTraining();
       this.offline.start();
       this.running.set(true);
     } else {
@@ -344,6 +594,8 @@ export class OrionStore implements OnDestroy {
     this.toasts.set([]);
     this.clearCopilot();
     this.lastAlertedId = 0;
+    this.training.set(null);
+    this.radioBubbles.set({});
     if (this.offline) {
       this.offline.reset();
       this.running.set(false);
@@ -355,10 +607,14 @@ export class OrionStore implements OnDestroy {
 
   async trigger(kind: Trigger): Promise<void> {
     if (this.offline) {
-      if (kind === 'spoofing') this.offline.triggerSpoofing();
-      if (kind === 'replay') this.offline.triggerReplay();
-      if (kind === 'interference') this.offline.triggerInterference();
-      if (kind === 'linkloss') this.offline.triggerLinkLoss();
+      // Manual injections go through the same path as the adversary, so ORION answers them too.
+      const manual: Partial<Record<Trigger, [AdversaryMoveKind, number | null]>> = {
+        spoofing: ['SPOOF', 2], replay: ['REPLAY', null], interference: ['JAMMER', null], linkloss: ['LINK_LOSS', 5],
+      };
+      const m = manual[kind];
+      if (m && !this.offline.applyAdversaryMove(m[0], m[1], 'SIMULATOR')) {
+        this.pushToast('info', 'Not possible right now', 'That attack is already under way or the drone is unavailable.');
+      }
       if (kind === 'weather-storm') this.offline.triggerWeather('STORM');
       if (kind === 'weather-rain') this.offline.triggerWeather('RAIN');
       if (kind === 'weather-wind') this.offline.triggerWeather('WIND');
@@ -393,6 +649,24 @@ export class OrionStore implements OnDestroy {
     if (this.offline) this.offline.speed = speed;
   }
 
+  async deployDrone(): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can deploy drones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
+    if (this.offline) {
+      const drone = this.offline.deployDrone(username);
+      this.pushToast('ok', 'Drone deployed', `Drone ${drone.id} launched at Base Forward Alpha.`);
+    } else {
+      const res = await this.call(() => this.api.deployDrone(username));
+      if (res) {
+        this.pushToast('ok', 'Drone deployed', `Drone ${res.drone_id} launched at Base Forward Alpha.`);
+      }
+    }
+    this.pollLive();
+  }
+
   /** Operator picks an action for a drone directly, instead of approving an ORION recommendation. */
   async commandDrone(
     droneId: number,
@@ -415,13 +689,18 @@ export class OrionStore implements OnDestroy {
       }
       reasonText = option.reason;
     }
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can command drones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
     if (this.offline) {
-      const res = this.offline.command(droneId, action, ORION_CONFIG.operatorId, targetZoneId, targetPoint, pathType);
+      const res = this.offline.command(droneId, action, username, targetZoneId, targetPoint, pathType);
       if (!res.ok) this.pushToast('warn', 'Command not sent', res.message);
       return;
     }
     const res = await this.call(() =>
-      this.api.command(droneId, action, reasonText, targetZoneId, targetPoint, pathType),
+      this.api.command(droneId, action, reasonText, targetZoneId, targetPoint, pathType, username),
     );
     if (res?.signed_command) {
       this.pushToast(
@@ -434,60 +713,118 @@ export class OrionStore implements OnDestroy {
   }
 
   async createPatrolZone(name: string, center: [number, number], radiusM: number): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can create patrol zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
     if (this.offline) {
-      this.offline.addPatrolZone(name, center, radiusM);
+      this.offline.addPatrolZone(name, center, radiusM, username);
       this.pushToast('ok', 'Patrol zone created', `${name} (radius ${Math.round(radiusM)} m) active`);
       return;
     }
-    const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM }));
+    const res = await this.call(() => this.api.createPatrolZone({ name, center, radius_m: radiusM, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Patrol zone created', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
     }
     this.pollLive();
   }
 
-  async deleteZone(zoneId: number): Promise<void> {
+  async movePatrolZone(zoneId: number, center: [number, number], pathType?: 'SAFE' | 'RISKY'): Promise<void> {
+    if (!this.isOperator()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Operators can move patrol zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'operator_demo';
+    const profile = pathType ?? this.pathType();
     if (this.offline) {
-      this.offline.deleteZone(zoneId);
+      const res = this.offline.movePatrolZone(zoneId, center, username, profile);
+      if (res.ok) {
+        this.pushToast('ok', 'Patrol zone moved', res.message);
+      } else {
+        this.pushToast('warn', 'Failed to move zone', res.message);
+      }
+      return;
+    }
+    const res = await this.call(() => this.api.movePatrolZone({ zone_id: zoneId, center, operator_id: username, path_type: profile }));
+    if (res) {
+      this.pushToast('ok', 'Patrol zone moved', res.message || `Patrol zone #${zoneId} moved to new coordinates.`);
+    }
+    this.pollLive();
+  }
+
+  async deleteZone(zoneId: number): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
+    if (this.offline) {
+      this.offline.deleteZone(zoneId, username);
       this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
       return;
     }
-    const res = await this.call(() => this.api.deleteZone(zoneId));
+    const res = await this.call(() => this.api.deleteZone(zoneId, username));
     if (res) {
       this.pushToast('ok', 'Zone deleted', `Tactical zone #${zoneId} deactivated`);
     }
     this.pollLive();
   }
 
-  async createThreatZone(name: string, center: [number, number], radiusM: number): Promise<void> {
-    if (this.offline) {
-      this.offline.addThreatZone(name, center, radiusM);
-      this.pushToast('warn', 'Threat zone established', `${name} (radius ${Math.round(radiusM)} m) active`);
+  async createThreatZone(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create threat zones.');
       return;
     }
-    const res = await this.call(() => this.api.createThreatZone({ name, center, radius_m: radiusM }));
+    const username = this.currentUser()?.username || 'commander_demo';
+    if (this.offline) {
+      this.offline.addThreatZone(name, waypoints, undefined, undefined, username);
+      this.pushToast('warn', 'Threat zone established', `${name} (${waypoints.length} vertices) active`);
+      return;
+    }
+    const res = await this.call(() => this.api.createThreatZone({ name, waypoints, operator_id: username }));
     if (res) {
-      this.pushToast('warn', 'Threat zone established', `${res.name} (radius ${Math.round(res.radius_m ?? radiusM)} m) active`);
+      this.pushToast('warn', 'Threat zone established', `${res.name} (${waypoints.length} vertices) active`);
     }
     this.pollLive();
   }
 
   async createSafeCorridor(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create safe corridors.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'commander_demo';
     if (this.offline) {
-      this.offline.addSafeCorridor(name, waypoints);
+      this.offline.addSafeCorridor(name, waypoints, username);
       this.pushToast('ok', 'Safe corridor opened', `${name} (${waypoints.length} waypoints) established`);
       return;
     }
-    const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints }));
+    const res = await this.call(() => this.api.createSafeCorridor({ name, waypoints, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Safe corridor opened', `${res.name} (${waypoints.length} waypoints) established`);
     }
     this.pollLive();
   }
 
-  async executeZoneTactic(zoneId: number, tactic: string): Promise<void> {
+  async createObjectiveZone(name: string, waypoints: [number, number][]): Promise<void> {
+    if (!this.isCommander()) {
+      this.pushToast('warn', 'Permission Denied', 'Only Commanders can create objective zones.');
+      return;
+    }
+    const username = this.currentUser()?.username || 'commander_demo';
     if (this.offline) {
-      const res = this.offline.executeZoneTactic(zoneId, tactic);
+      this.offline.addObjectiveZone(name, waypoints, username);
+      this.pushToast('ok', 'Objective zone created', `${name} (${waypoints.length} vertices) established`);
+      return;
+    }
+    const res = await this.call(() => this.api.createObjectiveZone({ name, waypoints, operator_id: username }));
+    if (res) {
+      this.pushToast('ok', 'Objective zone created', `${res.name} (${waypoints.length} vertices) established`);
+    }
+    this.pollLive();
+  }
+
+  async executeZoneTactic(zoneId: number, tactic: string): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
+    if (this.offline) {
+      const res = this.offline.executeZoneTactic(zoneId, tactic, username);
       if (res.ok) {
         this.pushToast('ok', 'Tactic executed', res.message);
       } else {
@@ -495,7 +832,7 @@ export class OrionStore implements OnDestroy {
       }
       return;
     }
-    const res = await this.call(() => this.api.executeZoneTactic({ zone_id: zoneId, tactic }));
+    const res = await this.call(() => this.api.executeZoneTactic({ zone_id: zoneId, tactic, operator_id: username }));
     if (res) {
       this.pushToast('ok', 'Tactic executed', `${tactic.replaceAll('_', ' ')} executed on Zone #${zoneId}`);
     }
@@ -503,12 +840,13 @@ export class OrionStore implements OnDestroy {
   }
 
   async decide(rec: Recommendation, decision: 'APPROVE' | 'REJECT'): Promise<void> {
+    const username = this.currentUser()?.username || (this.isCommander() ? 'commander_demo' : 'operator_demo');
     if (this.offline) {
-      const res = this.offline.decide(rec.id, decision, ORION_CONFIG.operatorId);
+      const res = this.offline.decide(rec.id, decision, username);
       if (!res.ok) this.pushToast('warn', 'Decision not applied', res.message);
       return;
     }
-    const res = await this.call(() => this.api.decide(rec.id, decision));
+    const res = await this.call(() => this.api.decide(rec.id, decision, undefined, username));
     if (res?.signed_command) {
       this.pushToast('ok', 'Signed command sent', `${res.signed_command.command} → Drone ${res.signed_command.drone_id} (seq ${res.signed_command.sequence})`);
     }
@@ -596,6 +934,115 @@ export class OrionStore implements OnDestroy {
     }
   }
 
+  // ---- radio log (push-to-talk) ------------------------------------------------------------
+
+  /** A drone mentioned on the radio gets the line as a bubble on the map, then it fades. */
+  private showBubbles(e: AuditEvent): void {
+    const entry = radioEntry(e);
+    if (!entry?.drones.length) return;
+    const text = entry.text.length > 90 ? entry.text.slice(0, 88) + '…' : entry.text;
+    this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) next[d] = { text, speaker: entry.speaker, id: e.id };
+      return next;
+    });
+    setTimeout(() => this.radioBubbles.update(b => {
+      const next = { ...b };
+      for (const d of entry.drones) if (next[d]?.id === e.id) delete next[d];
+      return next;
+    }), 7000);
+  }
+
+  private recorder: MediaRecorder | null = null;
+  private recStartedAt = 0;
+  private recTimer: ReturnType<typeof setInterval> | null = null;
+  private pttReleased = false;
+
+  /** Mic keyed (button pressed or Space held): start recording one transmission. */
+  async pttDown(): Promise<void> {
+    if (this.radio() !== 'idle') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      this.pushToast('warn', 'Radio unavailable', 'This browser cannot record from the microphone.');
+      return;
+    }
+    this.radio.set('recording');
+    this.radioSeconds.set(0);
+    this.pttReleased = false;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch {
+      this.radio.set('idle');
+      this.pushToast('warn', 'Microphone blocked', 'Allow microphone access for this page to use push-to-talk.');
+      return;
+    }
+    const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) ?? '';
+    const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    const startedIso = new Date().toISOString();
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop()); // mic indicator off between transmissions
+      const duration = (performance.now() - this.recStartedAt) / 1000;
+      void this.sendTransmission(new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' }), duration, startedIso);
+    };
+    this.recorder = recorder;
+    this.recStartedAt = performance.now();
+    recorder.start();
+    this.recTimer = setInterval(() => {
+      const t = (performance.now() - this.recStartedAt) / 1000;
+      this.radioSeconds.set(Math.floor(t));
+      if (t >= 60) this.pttUp(); // a stuck key shouldn't record forever
+    }, 250);
+    if (this.pttReleased) this.pttUp(); // released while the permission prompt was open
+  }
+
+  /** Mic released: stop recording and send the transmission for transcription. */
+  pttUp(): void {
+    this.pttReleased = true;
+    if (this.radio() !== 'recording' || !this.recorder) return;
+    if (this.recTimer) clearInterval(this.recTimer);
+    this.recTimer = null;
+    const r = this.recorder;
+    this.recorder = null;
+    if (r.state !== 'inactive') r.stop();
+  }
+
+  private async sendTransmission(blob: Blob, durationS: number, startedIso: string): Promise<void> {
+    if (durationS < 0.6 || blob.size < 500) {
+      this.radio.set('idle');
+      this.pushToast('info', 'Transmission too short', 'Hold the button (or Space) while you talk.');
+      return;
+    }
+    this.radio.set('transcribing');
+    const sim = this.offline;
+    const startElapsed = this.elapsed() - durationS;
+    try {
+      const res = await this.api.radioTransmit({
+        audio_base64: await blobToBase64(blob), mime_type: blob.type, duration_s: Math.round(durationS * 10) / 10,
+        operator_id: ORION_CONFIG.operatorId, started_at: startedIso, log: !sim,
+      });
+      if (!res.transcript) {
+        this.pushToast('info', 'Nothing understood', 'No speech was recognised in that transmission.');
+      } else {
+        if (sim && sim === this.offline) {
+          sim.logRadio(res.transcript, ORION_CONFIG.operatorId, {
+            duration_s: Math.round(durationS * 10) / 10, language: res.language, started_at: startedIso,
+            drones: res.drones, kind: res.kind,
+            transcribed_by: res.model, mission_time_s: Math.max(0, Math.round(startElapsed * 10) / 10),
+          });
+        } else if (!sim) {
+          this.pollLive();
+        }
+        this.pushToast('ok', 'Radio logged', `„${res.transcript}”`);
+      }
+    } catch (err) {
+      this.pushToast('warn', 'Transcription failed', radioError(err));
+    } finally {
+      this.radio.set('idle');
+    }
+  }
+
   clearCopilot(): void {
     this.copilot.set([]);
     this.highlightedEvents.set([]);
@@ -611,7 +1058,7 @@ export class OrionStore implements OnDestroy {
       this.detailsDroneId.set(null);
       return;
     }
-    this.selectedDroneId.set(id);
+    this.selectDrone(id);
     this.detailsDroneId.set(id);
   }
 
@@ -706,9 +1153,35 @@ export class OrionStore implements OnDestroy {
     } catch { /* storage unavailable */ }
 
     if (this.mode() === 'live') {
-      this.api.setRandomInterval(minVal, maxVal).catch((err) => {
+      this.api.setRandomInterval(minVal, maxVal, this.randomEventsEnabled()).catch((err) => {
         console.warn('Failed to update random event interval on backend', err);
       });
+    }
+  }
+
+  toggleRandomEvents(): void {
+    this.setRandomEventsEnabled(!this.randomEventsEnabled());
+  }
+
+  setRandomEventsEnabled(enabled: boolean): void {
+    this.randomEventsEnabled.set(enabled);
+    try {
+      localStorage.setItem('orion.randomEventsEnabled', String(enabled));
+    } catch { /* storage unavailable */ }
+
+    if (this.mode() === 'live') {
+      this.api.toggleRandomEvents(enabled).catch((err) => {
+        console.warn('Failed to toggle random events on backend', err);
+      });
+    }
+  }
+
+  private savedRandomEventsEnabled(): boolean {
+    try {
+      const v = localStorage.getItem('orion.randomEventsEnabled');
+      return v === null ? true : v === 'true';
+    } catch {
+      return true;
     }
   }
 
@@ -730,6 +1203,15 @@ export class OrionStore implements OnDestroy {
     }
   }
 
+  setAdversaryChoice(choice: AdversaryChoice): void {
+    this.adversaryChoice.set(choice);
+    try { localStorage.setItem('orion.adversary', choice); } catch { /* storage unavailable */ }
+  }
+
+  private savedAdversary(): AdversaryChoice {
+    try { return localStorage.getItem('orion.adversary') === 'GEMINI' ? 'GEMINI' : 'RL'; } catch { return 'RL'; }
+  }
+
   private savedMuted(): boolean {
     try { return localStorage.getItem('orion.muted') === 'true'; } catch { return false; }
   }
@@ -748,13 +1230,31 @@ export function summarise(e: AuditEvent): string {
   const d = parseDetails(e);
   const pick = (k: string) => (typeof d[k] === 'string' ? (d[k] as string) : undefined);
   const drone = e.drone_id ? `Drone ${e.drone_id}: ` : '';
+  const said = pick('transcript');
+  if (said) return drone + `„${said}”` + (d['simulated'] ? ' (simulated)' : '');
   return drone + (pick('blocked_reason') ?? pick('reason') ?? pick('assessment') ?? pick('description') ?? pick('action') ?? pick('summary') ?? pick('text') ?? e.event_type.replaceAll('_', ' ').toLowerCase());
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function radioError(err: unknown): string {
+  if (err instanceof HttpErrorResponse) {
+    if (err.status === 0) return `Transcription runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}.`;
+    if (typeof err.error?.detail === 'string') return err.error.detail;
+    return `Radio error (${err.status}).`;
+  }
+  return 'The transcript did not come back in time.';
 }
 
 function copilotError(err: unknown): string {
   if (err instanceof HttpErrorResponse) {
     if (err.status === 0) {
-      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and ANTHROPIC_API_KEY) to ask questions.`;
+      return `The copilot runs on the ORION backend, which isn't reachable at ${ORION_CONFIG.apiBase}. Start the backend (with internet and GEMINI_API_KEY) to ask questions.`;
     }
     if (typeof err.error?.detail === 'string') return err.error.detail;
     return `Copilot error (${err.status}).`;

@@ -1,3 +1,5 @@
+import base64
+import secrets
 import hashlib
 import hmac
 import json
@@ -168,3 +170,103 @@ class MAVLink2CommandSigner:
 
 
 command_signer = MAVLink2CommandSigner()
+
+
+# --- User Password Security & Token Authentication ---
+
+def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Hashes a password using PBKDF2-HMAC-SHA256 with 100,000 iterations.
+    Returns (hex_digest, salt).
+    """
+    if not salt:
+        salt = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt.encode('utf-8'),
+        100000
+    )
+    return key.hex(), salt
+
+
+def verify_password(plain_password: str, password_hash: str, salt: str) -> bool:
+    """
+    Verifies a plain-text password against the stored PBKDF2 hash using timing-safe comparison.
+    """
+    computed_hash, _ = hash_password(plain_password, salt)
+    return hmac.compare_digest(computed_hash, password_hash)
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
+
+
+def _b64url_decode(s: str) -> bytes:
+    padding = '=' * (4 - (len(s) % 4)) if len(s) % 4 != 0 else ''
+    return base64.urlsafe_b64decode(s + padding)
+
+
+def create_access_token(username: str, role: str, expires_in_seconds: int = 86400) -> str:
+    """
+    Generates a cryptographically signed HMAC-SHA256 bearer token.
+    Contains username, authoritative role, issued-at, expiration, and random nonce.
+    Any tampering with role or subject invalidates the HMAC signature.
+    """
+    now = int(time.time())
+    payload = {
+        "sub": username,
+        "role": role,
+        "iat": now,
+        "exp": now + expires_in_seconds,
+        "nonce": secrets.token_hex(8)
+    }
+    header_bytes = json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(',', ':')).encode('utf-8')
+    payload_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+
+    header_b64 = _b64url_encode(header_bytes)
+    payload_b64 = _b64url_encode(payload_bytes)
+    signing_input = f"{header_b64}.{payload_b64}".encode('utf-8')
+
+    secret = (getattr(settings, "SECRET_KEY", None) or settings.MAVLINK_SIGNING_KEY).encode('utf-8')
+    signature = hmac.new(secret, signing_input, hashlib.sha256).digest()
+    sig_b64 = _b64url_encode(signature)
+
+    return f"{header_b64}.{payload_b64}.{sig_b64}"
+
+
+def verify_access_token(token: str) -> Dict[str, Any]:
+    """
+    Cryptographically verifies an access token's HMAC-SHA256 signature and expiration.
+    Returns the decoded token claims.
+    Raises ValueError on tampering, signature failure, or expiration.
+    """
+    if not token or not isinstance(token, str):
+        raise ValueError("Missing or invalid token string")
+    parts = token.strip().split('.')
+    if len(parts) != 3:
+        raise ValueError("Invalid token format")
+
+    header_b64, payload_b64, sig_b64 = parts
+    signing_input = f"{header_b64}.{payload_b64}".encode('utf-8')
+    secret = (getattr(settings, "SECRET_KEY", None) or settings.MAVLINK_SIGNING_KEY).encode('utf-8')
+    expected_sig = hmac.new(secret, signing_input, hashlib.sha256).digest()
+
+    try:
+        actual_sig = _b64url_decode(sig_b64)
+    except Exception:
+        raise ValueError("Invalid signature encoding")
+
+    if not hmac.compare_digest(actual_sig, expected_sig):
+        raise ValueError("Cryptographic token signature mismatch or tampering detected")
+
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode('utf-8'))
+    except Exception:
+        raise ValueError("Invalid payload encoding")
+
+    now = int(time.time())
+    if payload.get("exp") and payload["exp"] < now:
+        raise ValueError("Token has expired")
+
+    return payload

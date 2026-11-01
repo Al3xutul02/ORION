@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import command_signer
 from app.models.recommendation import ActionRecommendation
+from app.models.user import User
+from app.api.endpoints.auth import require_operator
 from app.schemas.command import RecommendationResponse, OperatorActionApproval
 from app.services.aar_service import aar_service
 from app.services.command_manager import command_manager
@@ -34,16 +36,19 @@ def get_recommendations(status: str = "ALL", db: Session = Depends(get_db)):
 
 
 @router.post("/decide")
-def submit_operator_decision(payload: OperatorActionApproval, db: Session = Depends(get_db)):
+def submit_operator_decision(
+    payload: OperatorActionApproval,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
     """
     Submits a human operator decision (APPROVE or REJECT) for a tactical recommendation.
-    On approval, signs the MAVLink 2 command cryptographically, executes the drone maneuver,
-    and logs to the inviolable AAR.
+    Restricted strictly to Operators. Attributed to authenticated user from database.
     """
     success, message, command_data = command_manager.handle_operator_decision(
         db=db,
         recommendation_id=payload.recommendation_id,
-        operator_id=payload.operator_id,
+        operator_id=current_user.username,
         decision=payload.decision,
         notes=payload.notes
     )
@@ -64,13 +69,19 @@ def submit_operator_decision(payload: OperatorActionApproval, db: Session = Depe
 
 
 @router.post("/command")
-def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_db)):
+def send_direct_command(
+    payload: DirectDroneCommand,
+    current_user: User = Depends(require_operator),
+    db: Session = Depends(get_db)
+):
     """
-    Signs and dispatches a direct operator command to a drone in Live mode,
-    superseding any pending recommendations for that drone.
+    Signs and dispatches a direct operator command to a drone in Live mode.
+    Restricted strictly to Operators. Attributed to authenticated user from database.
     """
     if payload.drone_id not in simulator.drones:
         raise HTTPException(status_code=404, detail=f"Drone {payload.drone_id} not found")
+
+    op_user = current_user.username
 
     # Supersede pending recommendations for this drone
     pending = (
@@ -80,7 +91,7 @@ def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_d
     )
     for rec in pending:
         rec.status = "SUPERSEDED"
-        rec.operator_id = payload.operator_id
+        rec.operator_id = op_user
         rec.approved_at = datetime.now(timezone.utc)
         aar_service.log_event(
             db=db,
@@ -90,7 +101,7 @@ def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_d
                 "recommendation_id": rec.id,
                 "reason": f"Operator manually commanded {payload.action} instead"
             },
-            operator_id=payload.operator_id
+            operator_id=op_user
         )
     db.commit()
 
@@ -112,7 +123,7 @@ def send_direct_command(payload: DirectDroneCommand, db: Session = Depends(get_d
             "sequence": seq,
             "signature": cmd_payload["signature"]
         },
-        operator_id=payload.operator_id
+        operator_id=op_user
     )
 
     simulator.execute_drone_action(
